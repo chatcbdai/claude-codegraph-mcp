@@ -1,5 +1,17 @@
 import { CodeGraphCore } from "../core/indexer.js";
 import { AutoIndexer, CapabilityStatus, IndexingStatus } from "../core/auto-indexer.js";
+import { CodeGraph } from "../core/graph.js";
+import Database from "better-sqlite3";
+import path from "path";
+import os from "os";
+import fs from "fs/promises";
+import crypto from "crypto";
+import {
+  findImplementationReal,
+  traceExecutionReal,
+  impactAnalysisReal,
+  explainArchitectureReal
+} from "./tools-implementation.js";
 
 export interface ToolResult {
   content: Array<{
@@ -11,10 +23,12 @@ export interface ToolResult {
 export class ToolHandlers {
   protected core: CodeGraphCore;
   protected autoIndexer: AutoIndexer;
+  protected graph: CodeGraph;
 
   constructor(core: CodeGraphCore, autoIndexer: AutoIndexer) {
     this.core = core;
     this.autoIndexer = autoIndexer;
+    this.graph = new CodeGraph({ type: "sqlite" });
   }
 
   getTools() {
@@ -302,188 +316,147 @@ export class ToolHandlers {
       };
     }
 
-    return {
-      content: [
-        {
-          type: "text",
-          text: `# Codebase Analysis
+    try {
+      // Get the actual database path for this project
+      const projectHash = crypto.createHash('md5').update(workingDir).digest('hex').substring(0, 8);
+      const projectName = path.basename(workingDir);
+      const safeProjectName = projectName.replace(/[^a-zA-Z0-9-_]/g, '_');
+      const dbPath = path.join(os.homedir(), ".codegraph", "projects", `${safeProjectName}_${projectHash}`, "graph.db");
+      
+      // Check if database exists
+      try {
+        await fs.access(dbPath);
+      } catch {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Database not found. Please ensure indexing has completed.",
+            },
+          ],
+        };
+      }
 
-## Structure Overview
-- Project root: ${workingDir}
-- Analysis depth: ${depth}
-- Status: ${capabilities.queryIntelligence ? "Full analysis" : "Basic analysis"}
+      // Query the actual database
+      const db = new Database(dbPath, { readonly: true });
+      
+      // Get actual statistics from the database
+      const fileCount = db.prepare("SELECT COUNT(DISTINCT file) as count FROM nodes").get() as any;
+      const functionCount = db.prepare("SELECT COUNT(*) as count FROM nodes WHERE type = 'function'").get() as any;
+      const classCount = db.prepare("SELECT COUNT(*) as count FROM nodes WHERE type = 'class'").get() as any;
+      const relationshipCount = db.prepare("SELECT COUNT(*) as count FROM relationships").get() as any;
+      
+      // Get language distribution
+      const languages = db.prepare(`
+        SELECT json_extract(metadata, '$.language') as language, COUNT(*) as count 
+        FROM nodes 
+        WHERE type = 'file' AND metadata IS NOT NULL 
+        GROUP BY language
+      `).all() as any[];
+      
+      // Get most connected nodes (important components)
+      const importantNodes = db.prepare(`
+        SELECT n.name, n.type, n.file, COUNT(r.id) as connections
+        FROM nodes n
+        LEFT JOIN relationships r ON n.id = r.from_node OR n.id = r.to_node
+        GROUP BY n.id
+        ORDER BY connections DESC
+        LIMIT 10
+      `).all() as any[];
+      
+      // Get files with most functions/classes
+      const complexFiles = db.prepare(`
+        SELECT file, COUNT(*) as components
+        FROM nodes
+        WHERE type IN ('function', 'class')
+        GROUP BY file
+        ORDER BY components DESC
+        LIMIT 5
+      `).all() as any[];
+      
+      db.close();
+      
+      // Format the actual data
+      const languageList = languages
+        .filter(l => l.language)
+        .map(l => `${l.language}: ${l.count} files`)
+        .join(", ") || "No language data available";
+      
+      const importantNodesList = importantNodes
+        .slice(0, 5)
+        .map(n => `- **${n.name}** (${n.type}): ${n.connections} connections`)
+        .join("\n") || "- No components found";
+      
+      const complexFilesList = complexFiles
+        .map(f => `- ${f.file}: ${f.components} components`)
+        .join("\n") || "- No complex files found";
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: `# Codebase Analysis
 
-## Key Components
-- Functions identified: Check with find_implementation
-- Classes identified: Use explain_architecture for details
-- Dependencies mapped: Use impact_analysis to explore
+## Project Overview
+- **Location**: ${workingDir}
+- **Total Files**: ${fileCount?.count || 0}
+- **Functions**: ${functionCount?.count || 0}
+- **Classes**: ${classCount?.count || 0}
+- **Relationships**: ${relationshipCount?.count || 0}
+
+## Language Distribution
+${languageList}
+
+## Most Connected Components
+These are the most important nodes in your codebase based on relationships:
+${importantNodesList}
+
+## Most Complex Files
+Files with the most functions and classes:
+${complexFilesList}
+
+## Analysis Capabilities
+- ✅ Syntax Analysis: ${capabilities.syntaxAnalysis ? "Available" : "Not available"}
+- ${capabilities.graphRelationships ? "✅" : "⏳"} Graph Relationships: ${capabilities.graphRelationships ? "Available" : "Building..."}
+- ${capabilities.semanticSearch ? "✅" : "⏳"} Semantic Search: ${capabilities.semanticSearch ? "Available" : "Processing..."}
+- ${capabilities.temporalAnalysis ? "✅" : "⏳"} Temporal Analysis: ${capabilities.temporalAnalysis ? "Available" : "Analyzing..."}
+- ${capabilities.queryIntelligence ? "✅" : "⏳"} Query Intelligence: ${capabilities.queryIntelligence ? "Available" : "Training..."}
 
 ## Recommendations
-1. Use find_implementation to locate specific features
-2. Use trace_execution to understand code flow
-3. Use impact_analysis before making changes`,
-        },
-      ],
-    };
+1. ${functionCount?.count > 100 ? "Consider modularizing - you have many functions" : "Good function organization"}
+2. ${complexFiles.length > 0 && complexFiles[0].components > 20 ? `Refactor ${complexFiles[0].file} - it has ${complexFiles[0].components} components` : "File complexity is manageable"}
+3. Use 'find_implementation' to locate specific features
+4. Use 'trace_execution' to understand code flow
+5. Use 'impact_analysis' before making changes`,
+          },
+        ],
+      };
+    } catch (error: any) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Error analyzing codebase: ${error.message}\n\nMake sure indexing has completed for this project.`,
+          },
+        ],
+      };
+    }
   }
 
   protected async findImplementation(args: any): Promise<ToolResult> {
-    const query = args.query;
-    const context = args.context || "";
-
-    const capabilities = this.autoIndexer.getCapabilities(process.cwd());
-    if (!capabilities.syntaxAnalysis) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "⏳ Search requires indexing. Starting background indexing now...",
-          },
-        ],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `# Implementation Search Results
-
-Query: "${query}"
-${context ? `Context: ${context}` : ""}
-
-## Search Strategy
-${capabilities.semanticSearch ? "✅ Semantic search enabled" : "⚠️ Using keyword search only"}
-${capabilities.graphRelationships ? "✅ Relationship tracking active" : "⚠️ Basic structure search"}
-
-## Results
-Based on available capabilities, here are potential matches:
-- Check files matching the query pattern
-- Look for function/class definitions
-- Search for related imports/exports
-
-Use trace_execution to follow the implementation flow.`,
-        },
-      ],
-    };
+    return findImplementationReal(args, this.autoIndexer);
   }
 
   protected async traceExecution(args: any): Promise<ToolResult> {
-    const entryPoint = args.entryPoint;
-    const maxDepth = args.maxDepth || 5;
-
-    const capabilities = this.autoIndexer.getCapabilities(process.cwd());
-    if (!capabilities.graphRelationships) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "⏳ Execution tracing requires graph analysis. Please wait for indexing to reach that phase.",
-          },
-        ],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `# Execution Trace
-
-Entry Point: ${entryPoint}
-Max Depth: ${maxDepth}
-
-## Trace Results
-Starting from ${entryPoint}, the execution flow includes:
-- Direct calls identified
-- Dependencies tracked
-- Execution paths mapped
-
-${!capabilities.semanticSearch ? "⚠️ Note: Limited to structural analysis only" : "✅ Full semantic analysis available"}`,
-        },
-      ],
-    };
+    return traceExecutionReal(args, this.autoIndexer, this.graph);
   }
 
   protected async impactAnalysis(args: any): Promise<ToolResult> {
-    const component = args.component;
-    const changeType = args.changeType || "modify";
-
-    const capabilities = this.autoIndexer.getCapabilities(process.cwd());
-    if (!capabilities.graphRelationships) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "⏳ Impact analysis requires relationship mapping. Indexing in progress...",
-          },
-        ],
-      };
-    }
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `# Impact Analysis
-
-Component: ${component}
-Change Type: ${changeType}
-
-## Impact Assessment
-${capabilities.temporalAnalysis ? "✅ Including historical change patterns" : "⚠️ Current state analysis only"}
-
-### Direct Impact
-- Files that import this component
-- Functions that call this component
-- Tests that cover this component
-
-### Indirect Impact
-- Downstream dependencies
-- Related modules
-- Potential side effects
-
-## Risk Level
-Based on analysis: MEDIUM
-${!capabilities.queryIntelligence ? "⚠️ Note: Basic impact analysis only" : "✅ Full query intelligence active"}`,
-        },
-      ],
-    };
+    return impactAnalysisReal(args, this.autoIndexer, this.graph);
   }
 
   protected async explainArchitecture(args: any): Promise<ToolResult> {
-    const scope = args.scope || process.cwd();
-    const level = args.level || "high";
-
-    const capabilities = this.autoIndexer.getCapabilities(process.cwd());
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: `# Architecture Explanation
-
-Scope: ${scope}
-Level: ${level}
-
-## Architecture Overview
-${capabilities.syntaxAnalysis ? "✅ Structural analysis complete" : "⏳ Analyzing structure..."}
-${capabilities.graphRelationships ? "✅ Dependency graph mapped" : "⏳ Mapping dependencies..."}
-
-### Key Patterns Detected
-- Module organization
-- Layered architecture
-- Component relationships
-
-### Recommendations
-1. Use find_implementation for specific components
-2. Use impact_analysis before refactoring
-3. Use trace_execution to understand flows
-
-${capabilities.queryIntelligence ? "✅ Full architectural intelligence available" : "⚠️ Basic analysis only"}`,
-        },
-      ],
-    };
+    return explainArchitectureReal(args, this.autoIndexer);
   }
 
   protected formatIndexingStatus(status: IndexingStatus): string {
