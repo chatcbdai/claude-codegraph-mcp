@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import os from "os";
 import fs from "fs/promises";
+import crypto from "crypto";
 
 export type RelationType = 
   | "IMPORTS"
@@ -62,7 +63,7 @@ export class CodeGraph {
         dbPath = this.config.path;
       } else if (projectPath) {
         // Create project-specific database based on project path
-        const crypto = require('crypto');
+        // crypto already imported at top
         const projectHash = crypto.createHash('md5').update(projectPath).digest('hex').substring(0, 8);
         const projectName = path.basename(projectPath);
         const safeProjectName = projectName.replace(/[^a-zA-Z0-9-_]/g, '_');

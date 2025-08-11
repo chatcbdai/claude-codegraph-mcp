@@ -16,6 +16,7 @@ import { StatusBroadcaster } from "./core/status-broadcaster.js";
 import chokidar from "chokidar";
 import path from "path";
 import { fileURLToPath } from "url";
+import fs from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,7 +49,7 @@ class CodeGraphMCPServer {
     this.core = new CodeGraphCore();
     this.autoIndexer = new AutoIndexer(this.core);
     this.toolHandlers = new ProgressiveToolHandlers(this.core, this.autoIndexer);
-    this.resourceHandlers = new ResourceHandlers(this.core);
+    this.resourceHandlers = new ResourceHandlers(this.core, this.autoIndexer);
     this.statusBroadcaster = new StatusBroadcaster(this.autoIndexer);
 
     this.setupHandlers();
@@ -113,7 +114,7 @@ class CodeGraphMCPServer {
 
   private detectInitialWorkingDirectory(): string | null {
     try {
-      const fs = require('fs');
+      // fs already imported at top
       
       // 1. Check VS Code environment variables
       if (process.env.VSCODE_WORKSPACE_FOLDER) {
@@ -201,7 +202,7 @@ class CodeGraphMCPServer {
       }
       
       // Only watch if it's a valid, accessible directory
-      const fs = require('fs');
+      // fs already imported at top
       if (!fs.existsSync(workingDir) || !fs.statSync(workingDir).isDirectory()) {
         console.error(`[CodeGraph] Skipping file watching for invalid directory: ${workingDir}`);
         return;

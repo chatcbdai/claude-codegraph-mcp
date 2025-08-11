@@ -1,4 +1,12 @@
 import { CodeGraphCore } from "../core/indexer.js";
+import { AutoIndexer } from "../core/auto-indexer.js";
+import {
+  getArchitectureReal,
+  getDependenciesReal,
+  getHotspotsReal,
+  getStatusReal,
+  getMetricsReal
+} from "./resources-implementation.js";
 
 export interface ResourceContent {
   uri: string;
@@ -8,9 +16,11 @@ export interface ResourceContent {
 
 export class ResourceHandlers {
   private core: CodeGraphCore;
+  private autoIndexer: AutoIndexer;
 
-  constructor(core: CodeGraphCore) {
+  constructor(core: CodeGraphCore, autoIndexer?: AutoIndexer) {
     this.core = core;
+    this.autoIndexer = autoIndexer || new AutoIndexer(core);
   }
 
   getResources() {
@@ -68,163 +78,23 @@ export class ResourceHandlers {
   }
 
   private async getArchitecture(): Promise<ResourceContent> {
-    const modules = await this.getModules();
-    const layers = await this.detectLayers();
-    const patterns = await this.detectPatterns();
-
-    const content = this.formatArchitecture(modules, layers, patterns);
-
-    return {
-      uri: "codegraph://architecture",
-      mimeType: "text/markdown",
-      text: content,
-    };
+    return getArchitectureReal(this.core, this.autoIndexer);
   }
 
   private async getDependencies(): Promise<ResourceContent> {
-    const dependencies = await this.analyzeDependencies();
-
-    const content = `# Dependency Graph
-
-## Overview
-Comprehensive dependency analysis of the codebase.
-
-## External Dependencies
-${dependencies.external
-  .map((dep: any) => `- **${dep.name}**: ${dep.version || "latest"}`)
-  .join("\n")}
-
-## Internal Dependencies
-${dependencies.internal
-  .map((dep: any) => `- **${dep.from}** → **${dep.to}**`)
-  .join("\n")}
-
-## Circular Dependencies
-${
-  dependencies.circular.length > 0
-    ? dependencies.circular.map((c: any) => `⚠️ ${c}`).join("\n")
-    : "✅ No circular dependencies detected"
-}
-
-## Recommendations
-1. Review circular dependencies if any
-2. Consider modularizing tightly coupled components
-3. Update outdated dependencies`;
-
-    return {
-      uri: "codegraph://dependencies",
-      mimeType: "text/markdown",
-      text: content,
-    };
+    return getDependenciesReal(this.core, this.autoIndexer);
   }
 
   private async getHotspots(): Promise<ResourceContent> {
-    const hotspots = await this.analyzeHotspots();
-
-    const content = `# Code Hotspots
-
-## Overview
-Areas of code that change frequently or have high complexity.
-
-## High Change Frequency
-${hotspots.frequent
-  .map((h: any) => `- **${h.file}**: ${h.changes} changes in last 30 days`)
-  .join("\n")}
-
-## High Complexity
-${hotspots.complex
-  .map((h: any) => `- **${h.file}**: Complexity score ${h.score}`)
-  .join("\n")}
-
-## Large Files
-${hotspots.large
-  .map((h: any) => `- **${h.file}**: ${h.lines} lines`)
-  .join("\n")}
-
-## Recommendations
-1. Consider refactoring high-complexity files
-2. Add tests for frequently changed files
-3. Split large files into smaller modules`;
-
-    return {
-      uri: "codegraph://hotspots",
-      mimeType: "text/markdown",
-      text: content,
-    };
+    return getHotspotsReal(this.core, this.autoIndexer);
   }
 
   private async getStatus(): Promise<ResourceContent> {
-    const status = {
-      indexed: false,
-      progress: 0,
-      phase: "Not started",
-      capabilities: {
-        syntax: false,
-        graph: false,
-        semantic: false,
-        temporal: false,
-        query: false,
-      },
-    };
-
-    const content = `# CodeGraph Indexing Status
-
-## Current Status
-- **Indexed**: ${status.indexed ? "✅ Complete" : "⏳ In Progress"}
-- **Progress**: ${status.progress}%
-- **Phase**: ${status.phase}
-
-## Available Capabilities
-- **Syntax Analysis**: ${status.capabilities.syntax ? "✅" : "⏳"}
-- **Graph Relationships**: ${status.capabilities.graph ? "✅" : "⏳"}
-- **Semantic Search**: ${status.capabilities.semantic ? "✅" : "⏳"}
-- **Temporal Analysis**: ${status.capabilities.temporal ? "✅" : "⏳"}
-- **Query Intelligence**: ${status.capabilities.query ? "✅" : "⏳"}
-
-## Next Steps
-${
-  status.indexed
-    ? "All capabilities are available. Use CodeGraph tools to explore your codebase."
-    : "Indexing in progress. Basic features are available now, with more coming as indexing completes."
-}`;
-
-    return {
-      uri: "codegraph://status",
-      mimeType: "text/markdown",
-      text: content,
-    };
+    return getStatusReal(this.core, this.autoIndexer);
   }
 
   private async getMetrics(): Promise<ResourceContent> {
-    const metrics = await this.calculateMetrics();
-
-    const content = `# Code Metrics
-
-## Project Statistics
-- **Total Files**: ${metrics.files}
-- **Lines of Code**: ${metrics.loc}
-- **Languages**: ${metrics.languages.join(", ")}
-
-## Code Quality
-- **Test Coverage**: ${metrics.coverage}%
-- **Documentation**: ${metrics.documented}%
-- **Type Coverage**: ${metrics.typed}%
-
-## Complexity Metrics
-- **Average Complexity**: ${metrics.avgComplexity}
-- **Max Complexity**: ${metrics.maxComplexity}
-- **Technical Debt**: ${metrics.debt} hours
-
-## Recommendations
-1. ${metrics.coverage < 80 ? "Increase test coverage" : "Maintain test coverage"}
-2. ${metrics.documented < 60 ? "Add more documentation" : "Documentation is good"}
-3. ${metrics.avgComplexity > 10 ? "Refactor complex functions" : "Complexity is manageable"}`;
-
-    return {
-      uri: "codegraph://metrics",
-      mimeType: "text/markdown",
-      text: content,
-    };
+    return getMetricsReal(this.core, this.autoIndexer);
   }
 
   private formatArchitecture(modules: any[], layers: any[], patterns: any[]): string {

@@ -1,0 +1,203 @@
+workflow: code-development-cycle
+description: Complete code development pipeline with iterative quality improvements
+trigger: "cd-orchestrator receives development request"
+
+steps:
+  1:
+    name: "Analyze Request"
+    agent: cd-orchestrator
+    task: |
+      Determine development needs:
+      - Task type: new feature/bug fix/refactor/optimization
+      - Scope and complexity
+      - Integration points
+      - Quality requirements
+    output: development_plan
+
+  2:
+    name: "Understand Context"
+    agent: cd-orchestrator
+    task: |
+      Analyze existing codebase:
+      - Read relevant modules
+      - Identify patterns to follow
+      - Check dependencies
+      - Review similar implementations
+    tools: ["Read", "Grep"]
+    output: context_analysis
+
+  3:
+    name: "Test-First Development"
+    conditional:
+      - if: task_type == "new_feature"
+        agent: cd-test-generator
+        task: |
+          Create comprehensive test suite:
+          - Unit tests for new functionality
+          - Integration tests for workflows
+          - Edge case coverage
+          - Mock external dependencies
+        output: test_suite
+        next: 4
+      - else:
+        next: 4
+
+  4:
+    name: "Code Implementation"
+    agent: cd-code-generator
+    task: |
+      Generate code following My Robot patterns:
+      - Use BrowserFactory for browsers
+      - Implement async/await properly
+      - Add comprehensive error handling
+      - Include type hints
+      - Follow project conventions
+    input: [development_plan, context_analysis, test_suite]
+    output: implementation_v1
+
+  5:
+    name: "Code Review"
+    agent: cd-code-reviewer
+    task: |
+      Review code quality (0-100 score):
+      - Architecture & design (25 pts)
+      - Code quality (25 pts)
+      - Error handling (20 pts)
+      - My Robot integration (15 pts)
+      - Documentation (15 pts)
+    input: implementation_v1
+    output: review_results
+    decision:
+      - if: score >= 80
+        goto: 8
+      - if: iteration < 3
+        goto: 6
+      - else:
+        goto: 7
+
+  6:
+    name: "Code Revision"
+    agent: cd-code-reviewer
+    task: |
+      Request specific improvements:
+      - Provide exact line numbers
+      - Show example fixes
+      - Focus on critical issues first
+      - Maintain working functionality
+    output: revision_request
+    next: 4  # Back to generator
+
+  7:
+    name: "Final Review"
+    agent: cd-orchestrator
+    task: |
+      After 3 iterations, make final decision:
+      - Accept best version if score >= 70
+      - Document remaining issues
+      - Create tech debt ticket if needed
+    output: final_code
+
+  8:
+    name: "Test Implementation"
+    conditional:
+      - if: test_suite_exists
+        agent: cd-orchestrator
+        task: "Run existing tests against implementation"
+      - else:
+        agent: cd-test-generator
+        task: |
+          Generate tests for implementation:
+          - Unit tests for all methods
+          - Integration tests
+          - Async operation tests
+          - Error condition tests
+    output: test_results
+
+  9:
+    name: "Documentation"
+    agent: cd-documentation-writer
+    task: |
+      Create comprehensive documentation:
+      - Module and class docstrings
+      - Method documentation with examples
+      - Integration guide
+      - API reference updates
+    input: [final_code, test_results]
+    output: documentation
+
+  10:
+    name: "Quality Gates"
+    agent: cd-orchestrator
+    task: |
+      Run automated checks:
+      - python -m py_compile (syntax)
+      - mypy (type checking)
+      - black (formatting)
+      - pylint (code quality)
+      - pytest (all tests pass)
+    output: quality_report
+
+  11:
+    name: "Integration Package"
+    agent: cd-orchestrator
+    task: |
+      Prepare deliverables:
+      - Implementation files
+      - Test files
+      - Documentation
+      - Integration notes
+      - Migration guide (if needed)
+    output: delivery_package
+
+  12:
+    name: "Completion Report"
+    agent: cd-orchestrator
+    task: |
+      Generate summary:
+      - Features implemented
+      - Test coverage achieved
+      - Quality score
+      - Documentation status
+      - Next steps
+    output: completion_summary
+
+feedback_loops:
+  code_quality_loop:
+    max_iterations: 3
+    steps: [4, 5, 6]
+    exit_condition: "score >= 80 or iterations == 3"
+    
+  test_driven_loop:
+    when: "tests fail"
+    action: "Return to implementation with test failures"
+
+quality_thresholds:
+  minimum_score: 70
+  target_score: 85
+  test_coverage: 80
+  documentation_required: true
+
+error_handling:
+  syntax_error:
+    action: "Immediate fix required"
+    agent: cd-code-generator
+    
+  test_failure:
+    action: "Debug and fix"
+    max_attempts: 3
+    
+  integration_conflict:
+    action: "Escalate to user"
+    provide: "Conflict details and options"
+
+deliverables:
+  - working_code: "Tested, documented implementation"
+  - test_suite: "Comprehensive test coverage"
+  - documentation: "User and developer docs"
+  - quality_report: "All checks passed"
+
+integration_notes:
+  - CD-prefixed agents stay within this workflow
+  - Master orchestrator initiates for code tasks
+  - My Robot patterns must be followed
+  - Anti-detection compliance is mandatory

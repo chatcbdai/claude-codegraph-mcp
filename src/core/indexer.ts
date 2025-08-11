@@ -74,6 +74,10 @@ export class CodeGraphCore {
     }
   }
 
+  getProjectPath(): string {
+    return this.currentProjectPath || process.cwd();
+  }
+
   async countIndexableFiles(dirPath: string): Promise<number> {
     const files = await this.scanDirectory(dirPath);
     return files.filter((file) => this.isIndexableFile(file)).length;

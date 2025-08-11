@@ -1,0 +1,243 @@
+workflow: cross-team-collaboration
+description: Handles complex tasks requiring both social media and code development teams working together
+trigger: "Request involves both content/marketing and technical/code implementation"
+
+steps:
+  1:
+    name: "Analyze Collaboration Requirements"
+    agent: master-orchestrator
+    task: |
+      Determine collaboration needs:
+      - Which teams are required
+      - Dependencies between teams
+      - Optimal execution order
+      - Shared deliverables
+    output: collaboration_plan
+    tools: ["mcp__sequential-thinking__sequentialthinking"]
+
+  2:
+    name: "Parallel Team Briefing"
+    parallel:
+      - agent: sm-orchestrator
+        task: |
+          Understand content requirements:
+          - Content type and platforms
+          - Brand guidelines
+          - Timeline constraints
+        output: content_requirements
+      - agent: cd-orchestrator
+        task: |
+          Understand technical requirements:
+          - Implementation needs
+          - Integration points
+          - Technical constraints
+        output: technical_requirements
+
+  3:
+    name: "Cross-Team Planning"
+    agent: master-orchestrator
+    task: |
+      Create integrated execution plan:
+      - Identify shared components
+      - Define handoff points
+      - Set quality standards
+      - Establish success criteria
+    input: [content_requirements, technical_requirements]
+    output: integrated_plan
+
+  4:
+    name: "Coordinated Execution"
+    conditional:
+      - if: technical_first_required
+        sequence:
+          - agent: cd-orchestrator
+            task: "Implement technical foundation"
+            output: technical_implementation
+          - agent: sm-orchestrator
+            task: "Create content using technical output"
+            input: technical_implementation
+            output: content_creation
+      - else:
+        parallel:
+          - agent: sm-orchestrator
+            task: "Execute content workflow"
+            output: content_output
+          - agent: cd-orchestrator
+            task: "Execute development workflow"
+            output: code_output
+
+  5:
+    name: "Integration Phase"
+    agent: master-orchestrator
+    task: |
+      Integrate outputs from both teams:
+      - Merge deliverables
+      - Ensure compatibility
+      - Validate cross-team requirements
+      - Resolve any conflicts
+    input: [content_output, code_output]
+    output: integrated_output
+
+  6:
+    name: "Cross-Team Quality Review"
+    parallel:
+      - agent: sm-content-evaluator
+        task: "Review content quality and integration"
+        input: integrated_output
+        output: content_review
+      - agent: cd-code-reviewer
+        task: "Review technical implementation"
+        input: integrated_output
+        output: code_review
+    decision:
+      - if: both_approved
+        goto: 8
+      - else:
+        goto: 7
+
+  7:
+    name: "Coordinated Revision"
+    agent: master-orchestrator
+    task: |
+      Coordinate necessary revisions:
+      - Identify specific issues from reviews
+      - Delegate fixes to appropriate team
+      - Maintain integration integrity
+    input: [content_review, code_review]
+    output: revision_requirements
+    next: 4  # Return to execution with revisions
+
+  8:
+    name: "Final Integration Test"
+    agent: master-orchestrator
+    task: |
+      Perform end-to-end validation:
+      - Test content in technical implementation
+      - Verify all features work together
+      - Check performance metrics
+      - Validate user experience
+    output: integration_test_results
+
+  9:
+    name: "Deployment Preparation"
+    parallel:
+      - agent: sm-calendar-planner
+        task: "Schedule content deployment"
+        output: content_schedule
+      - agent: cd-orchestrator
+        task: "Prepare code deployment"
+        output: deployment_package
+
+  10:
+    name: "Completion Report"
+    agent: master-orchestrator
+    task: |
+      Generate comprehensive summary:
+      - Deliverables from both teams
+      - Integration success metrics
+      - Deployment readiness
+      - Next steps and maintenance
+    output: final_report
+
+collaboration_patterns:
+  content_driven_development:
+    description: "Content requirements drive technical implementation"
+    example: "Create social media dashboard with specific metrics"
+    flow:
+      1: SM team defines content needs
+      2: CD team implements supporting features
+      3: Integration and testing
+      4: Coordinated deployment
+
+  technical_content_generation:
+    description: "Technical features enable content creation"
+    example: "Build scraper then create content from scraped data"
+    flow:
+      1: CD team builds technical foundation
+      2: SM team uses output for content
+      3: Quality review and optimization
+      4: Synchronized release
+
+  parallel_development:
+    description: "Both teams work independently then integrate"
+    example: "Marketing website with blog automation"
+    flow:
+      1: Parallel development tracks
+      2: Regular sync points
+      3: Integration phase
+      4: Joint testing and deployment
+
+handoff_protocols:
+  sm_to_cd:
+    artifacts:
+      - Content specifications
+      - API requirements
+      - UI/UX preferences
+      - Performance expectations
+    format: structured_json
+
+  cd_to_sm:
+    artifacts:
+      - API endpoints
+      - Data schemas
+      - Usage documentation
+      - Integration examples
+    format: markdown_docs
+
+  bidirectional:
+    sync_frequency: "After each major milestone"
+    communication: "Via master-orchestrator"
+    conflict_resolution: "Escalate to user"
+
+quality_standards:
+  integrated_review:
+    content_in_code: "Content displays correctly in implementation"
+    code_supports_content: "All content features technically supported"
+    performance: "Combined solution meets performance targets"
+    user_experience: "Seamless integration from user perspective"
+
+success_metrics:
+  - Both teams complete their deliverables
+  - Integration tests pass
+  - "Quality scores meet thresholds (SM: 80+, CD: 90+)"
+  - No conflicts or incompatibilities
+  - Deployment ready
+
+error_handling:
+  team_conflict:
+    action: "Master orchestrator mediates"
+    escalation: "User decision required"
+  
+  integration_failure:
+    action: "Identify incompatibility source"
+    recovery: "Adjust implementation in failing team"
+  
+  timeline_mismatch:
+    action: "Reprioritize based on dependencies"
+    communication: "Update both teams immediately"
+
+examples:
+  social_media_automation_tool:
+    description: "Build tool to automate social media posting"
+    sm_team: "Define posting workflows and content templates"
+    cd_team: "Implement automation engine and API integrations"
+    integration: "Content templates in code, automated scheduling"
+
+  ai_content_generator:
+    description: "Create AI-powered content generation system"
+    cd_team: "Build AI integration and processing pipeline"
+    sm_team: "Create prompts, templates, and quality standards"
+    integration: "AI system uses SM templates and guidelines"
+
+  analytics_dashboard:
+    description: "Social media analytics with custom metrics"
+    sm_team: "Define metrics, KPIs, and reporting needs"
+    cd_team: "Implement data collection and visualization"
+    integration: "Real-time dashboard with SM-defined metrics"
+
+integration_notes:
+  - Master orchestrator always coordinates
+  - Teams maintain autonomy within their domain
+  - Regular sync points prevent divergence
+  - Quality standards from both teams enforced
+  - User notified of major milestones

@@ -304,18 +304,6 @@ export class ToolHandlers {
     const workingDir = args.path || process.cwd();
     const depth = args.depth || 3;
 
-    const capabilities = this.autoIndexer.getCapabilities(workingDir);
-    if (!capabilities.syntaxAnalysis) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: "⏳ Codebase analysis requires indexing to complete first. Please wait or use 'wait_for_indexing' tool.",
-          },
-        ],
-      };
-    }
-
     try {
       // Get the actual database path for this project
       const projectHash = crypto.createHash('md5').update(workingDir).digest('hex').substring(0, 8);
@@ -323,7 +311,7 @@ export class ToolHandlers {
       const safeProjectName = projectName.replace(/[^a-zA-Z0-9-_]/g, '_');
       const dbPath = path.join(os.homedir(), ".codegraph", "projects", `${safeProjectName}_${projectHash}`, "graph.db");
       
-      // Check if database exists
+      // Check if database exists first
       try {
         await fs.access(dbPath);
       } catch {
@@ -332,6 +320,19 @@ export class ToolHandlers {
             {
               type: "text",
               text: "Database not found. Please ensure indexing has completed.",
+            },
+          ],
+        };
+      }
+
+      // Now check capabilities
+      const capabilities = this.autoIndexer.getCapabilities(workingDir);
+      if (!capabilities.syntaxAnalysis) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "⏳ Codebase analysis requires indexing to complete first. Please wait or use 'wait_for_indexing' tool.",
             },
           ],
         };
