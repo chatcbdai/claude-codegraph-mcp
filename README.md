@@ -28,7 +28,7 @@ Universal Codebase Intelligence for Claude Code - A comprehensive MCP server tha
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/codegraph-mcp.git
+git clone https://github.com/chatcbdai/claude-codegraph-mcp
 cd codegraph-mcp
 
 # Install dependencies

@@ -3,15 +3,21 @@ export default {
   testEnvironment: 'node',
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
+  extensionsToTreatAsEsm: ['.ts'],
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {
+      useESM: true,
       tsconfig: {
-        module: 'commonjs',
+        module: 'ESNext',
+        moduleResolution: 'node',
         esModuleInterop: true,
         allowSyntheticDefaultImports: true
       }
     }]
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!(@xenova/transformers)/)'
+  ],
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1'
   },
