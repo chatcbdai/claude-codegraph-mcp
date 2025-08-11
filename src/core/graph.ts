@@ -12,7 +12,8 @@ export type RelationType =
   | "IMPLEMENTS"
   | "CONTAINS"
   | "DEPENDS_ON"
-  | "REFERENCES";
+  | "REFERENCES"
+  | "INHERITS_FROM";
 
 export interface GraphConfig {
   type: "sqlite" | "neo4j";

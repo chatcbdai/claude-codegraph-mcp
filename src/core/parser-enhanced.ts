@@ -180,13 +180,39 @@ export class EnhancedCodeParser {
         }
       }
 
-      // Extract function calls
-      const callMatches = line.matchAll(/(\w+)\s*\(/g);
-      for (const match of callMatches) {
-        const funcName = match[1];
-        // Filter out keywords and declarations
-        if (!['function', 'if', 'for', 'while', 'switch', 'catch', 'async', 'await'].includes(funcName)) {
-          functionCalls.add(funcName);
+      // Extract function calls (track per function, not globally)
+      if (structure.functions.length > 0 && !currentClass) {
+        // Find which function we're currently in based on line number
+        let currentFunc = null;
+        for (let j = structure.functions.length - 1; j >= 0; j--) {
+          const func = structure.functions[j];
+          if (i >= func.startLine - 1) {
+            currentFunc = func;
+            break;
+          }
+        }
+        
+        if (currentFunc) {
+          const callMatches = line.matchAll(/(\w+)\s*\(/g);
+          for (const match of callMatches) {
+            const funcName = match[1];
+            // Filter out keywords and declarations
+            if (!['function', 'if', 'for', 'while', 'switch', 'catch', 'async', 'await', 'return', 'typeof', 'instanceof'].includes(funcName)) {
+              if (!currentFunc.calls) currentFunc.calls = [];
+              if (!currentFunc.calls.includes(funcName)) {
+                currentFunc.calls.push(funcName);
+              }
+            }
+          }
+        }
+      } else {
+        // Still collect global function calls for later
+        const callMatches = line.matchAll(/(\w+)\s*\(/g);
+        for (const match of callMatches) {
+          const funcName = match[1];
+          if (!['function', 'if', 'for', 'while', 'switch', 'catch', 'async', 'await'].includes(funcName)) {
+            functionCalls.add(funcName);
+          }
         }
       }
 
@@ -201,12 +227,13 @@ export class EnhancedCodeParser {
       }
     }
 
-    // Add collected calls and references to functions
-    // For simplicity, distribute them to all functions
+    // Add any remaining global calls to functions that don't have calls yet
     const callsArray = Array.from(functionCalls);
     const refsArray = Array.from(references);
     for (const func of structure.functions) {
-      func.calls = callsArray;
+      if (!func.calls || func.calls.length === 0) {
+        func.calls = callsArray;
+      }
       func.references = refsArray;
     }
 
@@ -222,11 +249,15 @@ export class EnhancedCodeParser {
       imports: [],
       exports: [],
       dependencies: [],
+      typeAliases: [],
+      constants: [],
     };
 
     const lines = content.split("\n");
     let currentIndent = 0;
     let currentClass: any = null;
+    let inFunction = false;
+    let functionIndent = -1;
 
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
@@ -256,11 +287,80 @@ export class EnhancedCodeParser {
         }
       }
 
+      // Parse type aliases (e.g., HTMLContent = str, UserDict = Dict[str, Any])
+      if (!currentClass && indent === 0) {
+        // Type alias pattern: CapitalizedName = Type
+        const typeAliasMatch = trimmed.match(/^([A-Z]\w*)\s*=\s*(?:type\s+)?(.+)$/);
+        if (typeAliasMatch && !trimmed.includes('(') && !trimmed.includes('def')) {
+          const typeName = typeAliasMatch[1];
+          const typeValue = typeAliasMatch[2];
+          
+          // Check if it looks like a type (common patterns)
+          const isType = typeValue.match(/^(str|int|float|bool|list|dict|tuple|set|List|Dict|Tuple|Set|Union|Optional|Any|TypeVar|Protocol|Literal|Final|ClassVar|Callable|\w+\[.+\]|'[^']+')/) ||
+                        typeValue.includes('[') || typeValue.includes('Union') || typeValue.includes('Optional');
+          
+          if (isType) {
+            structure.typeAliases?.push({
+              name: typeName,
+              value: typeValue,
+              line: i + 1,
+            });
+          }
+        }
+        
+        // TypeVar pattern: T = TypeVar('T', ...)
+        const typeVarMatch = trimmed.match(/^(\w+)\s*=\s*TypeVar\s*\(/);
+        if (typeVarMatch) {
+          structure.typeAliases?.push({
+            name: typeVarMatch[1],
+            value: trimmed,
+            line: i + 1,
+            isTypeVar: true,
+          });
+        }
+        
+        // Constants pattern: CONSTANT_NAME = value
+        const constantMatch = trimmed.match(/^([A-Z_][A-Z0-9_]*)\s*=\s*(.+)$/);
+        if (constantMatch && !trimmed.includes('TypeVar') && !trimmed.includes('(')) {
+          structure.constants?.push({
+            name: constantMatch[1],
+            value: constantMatch[2],
+            line: i + 1,
+          });
+        }
+      }
+
+      // Parse @overload decorator
+      if (trimmed === '@overload' || trimmed.startsWith('@typing.overload')) {
+        // Mark that the next function is an overload
+        const nextNonEmptyLine = this.findNextNonEmptyLine(lines, i + 1);
+        if (nextNonEmptyLine !== -1) {
+          const nextLine = lines[nextNonEmptyLine].trim();
+          const overloadMatch = nextLine.match(/^(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)/);
+          if (overloadMatch) {
+            structure.functions.push({
+              name: overloadMatch[1],
+              startLine: nextNonEmptyLine + 1,
+              endLine: nextNonEmptyLine + 1,
+              async: nextLine.startsWith('async'),
+              params: overloadMatch[2].split(',').map(p => p.trim().split(/[:\s=]/)[0]).filter(p => p && p !== 'self'),
+              calls: [],
+              references: [],
+              content: nextLine,
+              isOverload: true,
+            });
+          }
+        }
+      }
+
       // Parse function definitions
       const funcMatch = trimmed.match(/^(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)/);
-      if (funcMatch) {
+      if (funcMatch && !trimmed.startsWith('@')) {
         const params = funcMatch[2].split(',').map(p => p.trim().split(/[:\s=]/)[0]).filter(p => p && p !== 'self');
         const isAsync = trimmed.startsWith('async');
+        
+        inFunction = true;
+        functionIndent = indent;
         
         const func = {
           name: funcMatch[1],
@@ -284,6 +384,9 @@ export class EnhancedCodeParser {
       // Parse class definitions
       const classMatch = trimmed.match(/^class\s+(\w+)(?:\(([^)]*)\))?/);
       if (classMatch) {
+        const baseClasses = classMatch[2] || '';
+        const isProtocol = baseClasses.includes('Protocol');
+        
         currentClass = {
           name: classMatch[1],
           extends: classMatch[2] || undefined,
@@ -291,6 +394,7 @@ export class EnhancedCodeParser {
           endLine: i + 1,
           methods: [],
           properties: [],
+          isProtocol: isProtocol,
         };
         currentIndent = indent;
         structure.classes.push(currentClass);
@@ -300,9 +404,24 @@ export class EnhancedCodeParser {
       if (indent === 0 && !trimmed.startsWith('class')) {
         currentClass = null;
       }
+      
+      // Check if we're exiting a function
+      if (inFunction && indent <= functionIndent) {
+        inFunction = false;
+        functionIndent = -1;
+      }
     }
 
     return structure;
+  }
+  
+  private findNextNonEmptyLine(lines: string[], startIndex: number): number {
+    for (let i = startIndex; i < lines.length; i++) {
+      if (lines[i].trim()) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   private parseGo(content: string): ParsedFile {

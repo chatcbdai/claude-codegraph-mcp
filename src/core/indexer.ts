@@ -16,6 +16,8 @@ export interface ParsedFile {
   imports: any[];
   exports: any[];
   dependencies: any[];
+  typeAliases?: any[];
+  constants?: any[];
 }
 
 export interface CodeChunk {
@@ -245,6 +247,7 @@ export class CodeGraphCore {
 
   private isIndexableFile(filePath: string): boolean {
     const extensions = [
+      // Programming languages
       ".ts",
       ".tsx",
       ".js",
@@ -257,6 +260,14 @@ export class CodeGraphCore {
       ".c",
       ".h",
       ".hpp",
+      // Text and data files
+      ".txt",
+      ".md",
+      ".json",
+      ".yaml",
+      ".yml",
+      ".xml",
+      ".csv",
     ];
     return extensions.some((ext) => filePath.endsWith(ext));
   }
@@ -298,11 +309,19 @@ export class CodeGraphCore {
       ".c": "c",
       ".h": "c",
       ".hpp": "cpp",
+      ".txt": "text",
+      ".md": "markdown",
+      ".json": "json",
+      ".yaml": "yaml",
+      ".yml": "yaml",
+      ".xml": "xml",
+      ".csv": "csv",
     };
     return languageMap[ext] || "text";
   }
 
   private async analyzeRelationships(file: ParsedFile): Promise<void> {
+    // Add file node
     await this.graph.addNode({
       id: file.path,
       type: "file",
@@ -316,9 +335,24 @@ export class CodeGraphCore {
       },
     });
 
+    // Process imports to create IMPORTS relationships
+    for (const imp of file.imports) {
+      // Try to resolve the import to a file in the project
+      const resolvedPath = await this.resolveImport(imp.source, file.path);
+      if (resolvedPath) {
+        await this.graph.addRelationship(
+          file.path,
+          resolvedPath,
+          "IMPORTS"
+        );
+      }
+    }
+
+    // Process functions
     for (const func of file.functions) {
+      const funcId = `${file.path}:${func.name}`;
       await this.graph.addNode({
-        id: `${file.path}:${func.name}`,
+        id: funcId,
         type: "function",
         name: func.name,
         file: file.path,
@@ -328,14 +362,31 @@ export class CodeGraphCore {
       
       await this.graph.addRelationship(
         file.path,
-        `${file.path}:${func.name}`,
+        funcId,
         "CONTAINS"
       );
+      
+      // Process function calls to create CALLS relationships
+      if (func.calls && func.calls.length > 0) {
+        for (const calledFunc of func.calls) {
+          // Try to resolve the called function
+          const calledFuncId = await this.resolveFunctionCall(calledFunc, file.path);
+          if (calledFuncId) {
+            await this.graph.addRelationship(
+              funcId,
+              calledFuncId,
+              "CALLS"
+            );
+          }
+        }
+      }
     }
 
+    // Process classes
     for (const cls of file.classes) {
+      const classId = `${file.path}:${cls.name}`;
       await this.graph.addNode({
-        id: `${file.path}:${cls.name}`,
+        id: classId,
         type: "class",
         name: cls.name,
         file: file.path,
@@ -345,10 +396,175 @@ export class CodeGraphCore {
       
       await this.graph.addRelationship(
         file.path,
-        `${file.path}:${cls.name}`,
+        classId,
         "CONTAINS"
       );
+      
+      // Process class inheritance
+      if (cls.extends) {
+        // Parse the base classes
+        const baseClasses = cls.extends.split(',').map((b: string) => b.trim());
+        for (const baseClass of baseClasses) {
+          // Skip common non-class bases like Protocol, ABC, etc.
+          if (!['object', 'Protocol', 'ABC', 'BaseModel'].includes(baseClass)) {
+            const baseClassId = await this.resolveClass(baseClass, file.path);
+            if (baseClassId) {
+              await this.graph.addRelationship(
+                classId,
+                baseClassId,
+                "INHERITS_FROM"
+              );
+            }
+          }
+        }
+      }
+      
+      // Process methods within the class
+      if (cls.methods && cls.methods.length > 0) {
+        for (const methodName of cls.methods) {
+          const methodId = `${classId}:${methodName}`;
+          await this.graph.addNode({
+            id: methodId,
+            type: "method",
+            name: methodName,
+            file: file.path,
+            content: "",
+            metadata: { className: cls.name },
+          });
+          
+          await this.graph.addRelationship(
+            classId,
+            methodId,
+            "CONTAINS"
+          );
+        }
+      }
     }
+    
+    // Process type aliases if present
+    if (file.typeAliases) {
+      for (const typeAlias of file.typeAliases) {
+        const typeAliasId = `${file.path}:${typeAlias.name}`;
+        await this.graph.addNode({
+          id: typeAliasId,
+          type: "type_alias",
+          name: typeAlias.name,
+          file: file.path,
+          content: typeAlias.value,
+          metadata: typeAlias,
+        });
+        
+        await this.graph.addRelationship(
+          file.path,
+          typeAliasId,
+          "CONTAINS"
+        );
+      }
+    }
+    
+    // Process constants if present
+    if (file.constants) {
+      for (const constant of file.constants) {
+        const constantId = `${file.path}:${constant.name}`;
+        await this.graph.addNode({
+          id: constantId,
+          type: "constant",
+          name: constant.name,
+          file: file.path,
+          content: constant.value,
+          metadata: constant,
+        });
+        
+        await this.graph.addRelationship(
+          file.path,
+          constantId,
+          "CONTAINS"
+        );
+      }
+    }
+  }
+
+  private async resolveImport(importPath: string, fromFile: string): Promise<string | null> {
+    // Handle relative imports
+    if (importPath.startsWith('.')) {
+      const dir = path.dirname(fromFile);
+      const possiblePaths = [
+        path.resolve(dir, importPath + '.js'),
+        path.resolve(dir, importPath + '.ts'),
+        path.resolve(dir, importPath + '.py'),
+        path.resolve(dir, importPath, 'index.js'),
+        path.resolve(dir, importPath, 'index.ts'),
+        path.resolve(dir, importPath, '__init__.py'),
+      ];
+      
+      for (const possiblePath of possiblePaths) {
+        if (this.parsedFiles.has(possiblePath)) {
+          return possiblePath;
+        }
+      }
+    }
+    
+    // For absolute imports, try to find the file in the project
+    const projectPath = this.currentProjectPath || process.cwd();
+    const possiblePaths = [
+      path.join(projectPath, 'node_modules', importPath, 'index.js'),
+      path.join(projectPath, 'src', importPath + '.js'),
+      path.join(projectPath, 'src', importPath + '.ts'),
+      path.join(projectPath, importPath + '.py'),
+    ];
+    
+    for (const possiblePath of possiblePaths) {
+      if (this.parsedFiles.has(possiblePath)) {
+        return possiblePath;
+      }
+    }
+    
+    return null;
+  }
+  
+  private async resolveFunctionCall(funcName: string, fromFile: string): Promise<string | null> {
+    // First check if it's a function in the same file
+    const fileData = this.parsedFiles.get(fromFile);
+    if (fileData) {
+      const localFunc = fileData.functions.find((f: any) => f.name === funcName);
+      if (localFunc) {
+        return `${fromFile}:${funcName}`;
+      }
+    }
+    
+    // Check imported modules
+    if (fileData && fileData.imports) {
+      // This is simplified - in reality we'd need to track what's imported from where
+      for (const parsedFile of this.parsedFiles.values()) {
+        const func = parsedFile.functions.find((f: any) => f.name === funcName);
+        if (func) {
+          return `${parsedFile.path}:${funcName}`;
+        }
+      }
+    }
+    
+    return null;
+  }
+  
+  private async resolveClass(className: string, fromFile: string): Promise<string | null> {
+    // First check if it's a class in the same file
+    const fileData = this.parsedFiles.get(fromFile);
+    if (fileData) {
+      const localClass = fileData.classes.find((c: any) => c.name === className);
+      if (localClass) {
+        return `${fromFile}:${className}`;
+      }
+    }
+    
+    // Check all parsed files for the class
+    for (const parsedFile of this.parsedFiles.values()) {
+      const cls = parsedFile.classes.find((c: any) => c.name === className);
+      if (cls) {
+        return `${parsedFile.path}:${className}`;
+      }
+    }
+    
+    return null;
   }
 
   private async generateEmbedding(chunk: CodeChunk): Promise<void> {
