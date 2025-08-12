@@ -49,28 +49,42 @@ export class TreeSitterParser {
       ];
 
       for (const { name, grammar } of languages) {
-        const parser = new Parser();
-        parser.setLanguage(grammar);
-        this.parsers.set(name, parser);
-        this.languageMap.set(name, grammar);
+        try {
+          const parser = new Parser();
+          parser.setLanguage(grammar);
+          this.parsers.set(name, parser);
+          this.languageMap.set(name, grammar);
+        } catch (langError: any) {
+          console.warn(`[CodeGraph] Failed to initialize ${name} parser: ${langError.message}`);
+        }
       }
 
-      // Verify parsers work
+      // Verify at least one parser works
+      if (this.parsers.size === 0) {
+        throw new Error("No tree-sitter parsers could be initialized");
+      }
+
+      // Try to verify JavaScript parser if available
       const testParser = this.parsers.get("javascript");
       if (testParser) {
-        const tree = testParser.parse("const x = 1;");
-        if (!tree || !tree.rootNode) {
-          throw new Error("Parser verification failed");
+        try {
+          const tree = testParser.parse("const x = 1;");
+          if (!tree || !tree.rootNode) {
+            console.warn("[CodeGraph] JavaScript parser verification failed");
+          }
+        } catch {
+          console.warn("[CodeGraph] JavaScript parser test failed");
         }
       }
 
       this.initialized = true;
-      console.error("[CodeGraph] Tree-sitter parsers initialized successfully");
+      console.error(`[CodeGraph] Tree-sitter initialized with ${this.parsers.size} parsers`);
     } catch (error: any) {
       console.error(`[CodeGraph] Tree-sitter initialization failed: ${error.message}`);
       if (!this.config.fallbackToRegex) {
         throw error;
       }
+      this.initialized = true; // Mark as initialized to use fallback
     }
   }
 
