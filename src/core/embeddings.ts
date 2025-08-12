@@ -1,74 +1,282 @@
-import { pipeline } from "@xenova/transformers";
+import { pipeline, env } from "@xenova/transformers";
 import crypto from "crypto";
 
-export class EmbeddingEngine {
-  private model?: any; // Using any for the pipeline type
-  private cache: Map<string, Float32Array> = new Map();
-  private initialized = false;
-  private modelName = "Xenova/all-MiniLM-L6-v2";
+// Disable local model loading to ensure compatibility
+env.allowLocalModels = false;
+// @ts-ignore - remoteURL might not be in types but exists in runtime
+env.remoteURL = "https://huggingface.co/";
+
+export interface EmbeddingProvider {
+  name: string;
+  initialize(): Promise<void>;
+  embed(text: string): Promise<Float32Array>;
+  isAvailable(): boolean;
+}
+
+// Primary: OpenAI-compatible embeddings (requires API key)
+class OpenAIProvider implements EmbeddingProvider {
+  name = "openai";
+  private apiKey?: string;
+  private available = false;
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-
-    try {
-      console.error("[CodeGraph] Initializing embedding model...");
-      this.model = await pipeline("feature-extraction", this.modelName);
-      this.initialized = true;
-      console.error("[CodeGraph] Embedding model initialized successfully");
-    } catch (error: any) {
-      console.error(`[CodeGraph] Warning: Could not initialize embedding model: ${error.message}`);
-      console.error("[CodeGraph] Semantic search will use fallback text matching");
-      this.initialized = true;
+    this.apiKey = process.env.OPENAI_API_KEY;
+    this.available = !!this.apiKey;
+    if (!this.available) {
+      console.error("[CodeGraph] OpenAI API key not found, skipping OpenAI provider");
     }
   }
 
   async embed(text: string): Promise<Float32Array> {
-    const cacheKey = this.hashText(text);
+    if (!this.available || !this.apiKey) {
+      throw new Error("OpenAI provider not available");
+    }
     
+    const response = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        input: text.substring(0, 8191), // OpenAI limit
+        model: "text-embedding-3-small",
+        dimensions: 384 // Match our expected dimension
+      })
+    });
+    
+    const data: any = await response.json();
+    return new Float32Array(data.data[0].embedding);
+  }
+
+  isAvailable(): boolean {
+    return this.available;
+  }
+}
+
+// Secondary: Fixed Xenova Transformers
+class XenovaProvider implements EmbeddingProvider {
+  name = "xenova";
+  private model?: any;
+  private available = false;
+
+  async initialize(): Promise<void> {
+    try {
+      // Use a more stable model
+      this.model = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", {
+        quantized: false, // Disable quantization to avoid type issues
+      });
+      
+      // Test the model with a simple embedding
+      const testOutput = await this.model("test", { pooling: "mean", normalize: true });
+      
+      // Verify output format
+      if (testOutput && testOutput.data) {
+        this.available = true;
+        console.error("[CodeGraph] Xenova provider initialized successfully");
+      } else {
+        throw new Error("Invalid model output format");
+      }
+    } catch (error: any) {
+      console.error(`[CodeGraph] Xenova provider failed: ${error.message}`);
+      this.available = false;
+    }
+  }
+
+  async embed(text: string): Promise<Float32Array> {
+    if (!this.available || !this.model) {
+      throw new Error("Xenova provider not available");
+    }
+    
+    try {
+      const output = await this.model(text.substring(0, 512), {
+        pooling: "mean",
+        normalize: true,
+      });
+      
+      // Handle both possible output formats
+      let data: number[];
+      if (output.data) {
+        data = Array.from(output.data);
+      } else if (output.ort_tensor?.data) {
+        data = Array.from(output.ort_tensor.data);
+      } else if (Array.isArray(output)) {
+        data = output;
+      } else {
+        throw new Error("Unexpected output format from model");
+      }
+      
+      return new Float32Array(data);
+    } catch (error: any) {
+      throw new Error(`Xenova embedding failed: ${error.message}`);
+    }
+  }
+
+  isAvailable(): boolean {
+    return this.available;
+  }
+}
+
+// Tertiary: Deterministic fallback (always works)
+class DeterministicProvider implements EmbeddingProvider {
+  name = "deterministic";
+  private available = true;
+  private dimensions = 384;
+
+  async initialize(): Promise<void> {
+    console.error("[CodeGraph] Deterministic embedding provider ready (fallback)");
+  }
+
+  async embed(text: string): Promise<Float32Array> {
+    // Create a deterministic embedding based on text content
+    const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 0);
+    const embedding = new Float32Array(this.dimensions);
+    
+    // Use multiple hash functions for better distribution
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      
+      // Multiple hash strategies
+      const hash1 = this.hashCode(word);
+      const hash2 = this.hashCode(word.split('').reverse().join(''));
+      const hash3 = this.hashCode(word + word);
+      
+      // Distribute across embedding dimensions
+      embedding[(hash1 >>> 0) % this.dimensions] += 1.0 / (i + 1);
+      embedding[(hash2 >>> 0) % this.dimensions] += 0.5 / (i + 1);
+      embedding[(hash3 >>> 0) % this.dimensions] += 0.25 / (i + 1);
+    }
+    
+    // Add positional encoding
+    for (let i = 0; i < Math.min(words.length, this.dimensions); i++) {
+      embedding[i] += Math.sin(i / 10.0) * 0.1;
+    }
+    
+    // Normalize
+    let norm = 0;
+    for (let i = 0; i < embedding.length; i++) {
+      norm += embedding[i] * embedding[i];
+    }
+    norm = Math.sqrt(norm);
+    
+    if (norm > 0) {
+      for (let i = 0; i < embedding.length; i++) {
+        embedding[i] /= norm;
+      }
+    }
+    
+    return embedding;
+  }
+
+  private hashCode(str: string): number {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32bit integer
+    }
+    return hash;
+  }
+
+  isAvailable(): boolean {
+    return this.available;
+  }
+}
+
+export class EmbeddingEngine {
+  private providers: EmbeddingProvider[] = [];
+  private activeProvider?: EmbeddingProvider;
+  private cache: Map<string, Float32Array> = new Map();
+  private initialized = false;
+
+  async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    console.error("[CodeGraph] Initializing embedding system with multiple providers...");
+    
+    // Initialize all providers in order of preference
+    const providerClasses = [
+      OpenAIProvider,
+      XenovaProvider,
+      DeterministicProvider
+    ];
+    
+    for (const ProviderClass of providerClasses) {
+      const provider = new ProviderClass();
+      await provider.initialize();
+      this.providers.push(provider);
+      
+      // Use the first available provider
+      if (!this.activeProvider && provider.isAvailable()) {
+        this.activeProvider = provider;
+        console.error(`[CodeGraph] Using ${provider.name} embedding provider`);
+      }
+    }
+    
+    if (!this.activeProvider) {
+      // This should never happen as DeterministicProvider always works
+      throw new Error("No embedding providers available!");
+    }
+    
+    this.initialized = true;
+    console.error("[CodeGraph] Embedding system initialized successfully");
+  }
+
+  async embed(text: string): Promise<Float32Array> {
+    if (!this.initialized || !this.activeProvider) {
+      throw new Error("Embedding engine not initialized");
+    }
+
+    const cacheKey = this.hashText(text);
     if (this.cache.has(cacheKey)) {
       return this.cache.get(cacheKey)!;
     }
 
-    if (!this.model) {
-      return this.fallbackEmbed(text);
-    }
-
+    let lastError: Error | null = null;
+    
+    // Try active provider first
     try {
-      const truncatedText = text.substring(0, 512);
-      
-      const output = await this.model(truncatedText, {
-        pooling: "mean",
-        normalize: true,
-      });
-
-      const embedding = new Float32Array(output.data);
+      const embedding = await this.activeProvider.embed(text);
       this.cache.set(cacheKey, embedding);
-
-      if (this.cache.size > 10000) {
-        const firstKey = this.cache.keys().next().value;
-        if (firstKey) this.cache.delete(firstKey);
-      }
-
       return embedding;
     } catch (error: any) {
-      console.error(`[CodeGraph] Error generating embedding: ${error.message}`);
-      return this.fallbackEmbed(text);
+      lastError = error;
+      console.error(`[CodeGraph] Primary provider ${this.activeProvider.name} failed: ${error.message}`);
     }
+    
+    // Fallback through remaining providers
+    for (const provider of this.providers) {
+      if (provider === this.activeProvider || !provider.isAvailable()) continue;
+      
+      try {
+        console.error(`[CodeGraph] Falling back to ${provider.name} provider`);
+        const embedding = await provider.embed(text);
+        
+        // Switch to this provider for future embeddings
+        this.activeProvider = provider;
+        
+        this.cache.set(cacheKey, embedding);
+        return embedding;
+      } catch (error: any) {
+        lastError = error;
+        console.error(`[CodeGraph] Provider ${provider.name} failed: ${error.message}`);
+      }
+    }
+    
+    throw new Error(`All embedding providers failed. Last error: ${lastError?.message}`);
   }
 
   async embedBatch(texts: string[]): Promise<Float32Array[]> {
     const embeddings: Float32Array[] = [];
-    
     for (const text of texts) {
-      const embedding = await this.embed(text);
-      embeddings.push(embedding);
+      embeddings.push(await this.embed(text));
     }
-    
     return embeddings;
   }
 
   cosineSimilarity(a: Float32Array, b: Float32Array): number {
     if (a.length !== b.length) {
+      console.warn(`[CodeGraph] Embedding dimension mismatch: ${a.length} vs ${b.length}`);
       return 0;
     }
 
@@ -96,29 +304,8 @@ export class EmbeddingEngine {
     return crypto.createHash("sha256").update(text).digest("hex");
   }
 
-  private fallbackEmbed(text: string): Float32Array {
-    const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 0);
-    const uniqueWords = Array.from(new Set(words));
-    const embedding = new Float32Array(384);
-    
-    for (let i = 0; i < uniqueWords.length && i < 384; i++) {
-      const word = uniqueWords[i];
-      let hash = 0;
-      for (let j = 0; j < word.length; j++) {
-        hash = ((hash << 5) - hash) + word.charCodeAt(j);
-        hash = hash & hash;
-      }
-      embedding[i % 384] += (hash % 100) / 100;
-    }
-    
-    const norm = Math.sqrt(embedding.reduce((sum, val) => sum + val * val, 0));
-    if (norm > 0) {
-      for (let i = 0; i < embedding.length; i++) {
-        embedding[i] /= norm;
-      }
-    }
-    
-    return embedding;
+  getActiveProvider(): string {
+    return this.activeProvider?.name || "none";
   }
 
   async search(

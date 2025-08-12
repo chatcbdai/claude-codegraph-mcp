@@ -4,7 +4,6 @@ import { simpleGit, SimpleGit } from "simple-git";
 import ignore from "ignore";
 
 export interface ScanConfig {
-  maxDepth: number;
   followSymlinks: boolean;
   respectGitignore: boolean;
   excludePatterns: string[];
@@ -19,7 +18,6 @@ export class FileScanner {
 
   constructor(config: Partial<ScanConfig> = {}) {
     this.config = {
-      maxDepth: 10, // Consistent depth limit
       followSymlinks: false,
       respectGitignore: true,
       excludePatterns: [
@@ -68,17 +66,8 @@ export class FileScanner {
     }
   }
 
-  async scanDirectory(
-    dirPath: string,
-    currentDepth: number = 0
-  ): Promise<string[]> {
+  async scanDirectory(dirPath: string): Promise<string[]> {
     const files: string[] = [];
-    
-    // Check depth limit
-    if (currentDepth >= this.config.maxDepth) {
-      console.warn(`[FileScanner] Max depth ${this.config.maxDepth} reached at ${dirPath}`);
-      return files;
-    }
 
     try {
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
@@ -98,8 +87,8 @@ export class FileScanner {
             continue;
           }
           
-          // Recursively scan subdirectory
-          const subFiles = await this.scanDirectory(fullPath, currentDepth + 1);
+          // Recursively scan subdirectory - no depth limit!
+          const subFiles = await this.scanDirectory(fullPath);
           files.push(...subFiles);
         } else if (entry.isFile()) {
           // Check file pattern and size
@@ -139,7 +128,12 @@ export class FileScanner {
   private shouldIncludeFile(name: string, fullPath: string): boolean {
     // Check include patterns
     for (const pattern of this.config.includePatterns) {
-      const regex = new RegExp(pattern.replace("*", ".*"));
+      // Convert glob pattern to regex properly
+      // *.ts should match "file.ts" but not "file.txt" or "tests"
+      const regexPattern = pattern
+        .replace(/\./g, '\\.')  // Escape dots
+        .replace(/\*/g, '.*');  // Convert * to .*
+      const regex = new RegExp('^' + regexPattern + '$');
       if (regex.test(name)) {
         return true;
       }

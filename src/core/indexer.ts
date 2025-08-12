@@ -2,11 +2,12 @@ import path from "path";
 import fs from "fs/promises";
 import { CodeParser } from "./parser.js";
 import { CodeGraph } from "./graph.js";
-import { EmbeddingEngine } from "./embeddings-fixed.js";
+import { EmbeddingEngine } from "./embeddings.js";
 import { SmartChunker } from "../utils/chunker.js";
 import { Logger } from "../utils/logger.js";
 import { IndexingStatus } from "./auto-indexer.js";
 import { simpleGit } from "simple-git";
+import { FileScanner } from "./file-scanner.js";
 
 export interface ParsedFile {
   path: string;
@@ -37,13 +38,14 @@ export interface CodeChunk {
 }
 
 export class CodeGraphCore {
-  private static readonly INDEXER_VERSION = "2.0.0"; // Bump this to force re-index
+  private static readonly INDEXER_VERSION = "3.0.0"; // Bump this to force re-index
   private parser: CodeParser;
   private graph: CodeGraph;
   private embeddings: EmbeddingEngine;
   private chunker: SmartChunker;
   private logger: Logger;
   private git: any;
+  private fileScanner: FileScanner;
   private parsedFiles: Map<string, ParsedFile> = new Map();
   private codeChunks: Map<string, CodeChunk> = new Map();
   private currentProjectPath?: string;
@@ -55,6 +57,7 @@ export class CodeGraphCore {
     this.embeddings = new EmbeddingEngine();
     this.chunker = new SmartChunker();
     this.logger = new Logger("CodeGraphCore");
+    this.fileScanner = new FileScanner();
   }
 
   async initialize(projectPath?: string): Promise<void> {
@@ -300,13 +303,16 @@ export class CodeGraphCore {
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
         
-        // Check if this is a worktree directory
-        const isWorktree = worktreePaths.some(wt => 
-          fullPath.startsWith(wt) && fullPath !== dirPath
-        );
+        // Skip if this path is in a different worktree (not the main one)
+        const isInDifferentWorktree = worktreePaths.some(wt => {
+          // Skip if it's the current project directory (main worktree)
+          if (wt === dirPath) return false;
+          // Check if this file is in a different worktree
+          return fullPath.startsWith(wt);
+        });
         
-        if (isWorktree) {
-          // Skip worktree directories
+        if (isInDifferentWorktree) {
+          // Skip files in other worktrees
           continue;
         }
         

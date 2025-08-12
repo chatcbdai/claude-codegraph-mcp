@@ -1,4 +1,4 @@
-import { EmbeddingEngine } from "../src/core/embeddings-fixed";
+import { EmbeddingEngine } from "../src/core/embeddings";
 
 describe("Fixed Embedding System Validation", () => {
   let engine: EmbeddingEngine;

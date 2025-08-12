@@ -1,6 +1,6 @@
 import { CodeGraphCore } from "../src/core/indexer";
 import { TreeSitterParser } from "../src/core/parser-treesitter";
-import { EmbeddingEngine } from "../src/core/embeddings-fixed";
+import { EmbeddingEngine } from "../src/core/embeddings";
 import { DatabaseManager } from "../src/core/db-manager";
 import { FileScanner } from "../src/core/file-scanner";
 import { ConcurrencyManager, Debouncer, RetryableOperation } from "../src/core/error-handler";
