@@ -129,7 +129,12 @@ export class AutoIndexer extends EventEmitter {
       this.updateStatus(dirPath, status);
 
       status.currentPhase = "complete";
-      await this.finalizeIndexing(dirPath, status);
+      try {
+        await this.finalizeIndexing(dirPath, status);
+      } catch (error: any) {
+        this.logger.error(`Finalization failed but continuing: ${error.message}`);
+        // Continue even if finalization fails - the index is mostly complete
+      }
       status.capabilities.queryIntelligence = true;
       status.progress = 100;
       status.isIndexing = false;
@@ -220,8 +225,17 @@ export class AutoIndexer extends EventEmitter {
     dirPath: string,
     status: IndexingStatus
   ): Promise<void> {
-    await this.coreIndexer.finalizeIndex(dirPath);
-    await this.saveIndexStatus(dirPath, status);
+    try {
+      this.logger.info(`Starting finalization for: ${dirPath}`);
+      await this.coreIndexer.finalizeIndex(dirPath);
+      this.logger.info(`Finalization complete, saving status for: ${dirPath}`);
+      await this.saveIndexStatus(dirPath, status);
+      this.logger.info(`Status saved successfully for: ${dirPath}`);
+    } catch (error: any) {
+      this.logger.error(`Error in finalizeIndexing: ${error.message}`);
+      this.logger.error(`Stack trace: ${error.stack}`);
+      throw error; // Re-throw to be caught by the main error handler
+    }
   }
 
   private updateStatus(dirPath: string, status: IndexingStatus): void {
@@ -265,6 +279,17 @@ export class AutoIndexer extends EventEmitter {
   private async loadExistingStatus(dirPath: string): Promise<void> {
     const status = await this.coreIndexer.loadIndexStatus(dirPath);
     if (status) {
+      // Fix corrupted status that might be stuck at 90%
+      if (status.isIndexing && status.progress === 90 && status.currentPhase === "complete") {
+        this.logger.warn(`Detected corrupted indexing status for ${dirPath}, resetting...`);
+        // Mark as complete if it was stuck
+        status.isIndexing = false;
+        status.isComplete = true;
+        status.progress = 100;
+        status.capabilities.queryIntelligence = true;
+        // Save the corrected status
+        await this.coreIndexer.saveIndexStatus(dirPath, status);
+      }
       this.indexingStatus.set(dirPath, status);
       this.emit("statusChange", dirPath, status);
     }

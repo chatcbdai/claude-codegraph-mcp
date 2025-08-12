@@ -77,7 +77,7 @@ install_codegraph() {
     
     # Install dependencies
     echo "Installing dependencies..."
-    npm install --production
+    npm install
     
     # Build the project
     echo "Building project..."

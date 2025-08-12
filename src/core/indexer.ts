@@ -182,9 +182,23 @@ export class CodeGraphCore {
   }
 
   async finalizeIndex(dirPath: string): Promise<void> {
-    await this.buildQueryIndex(dirPath);
-    await this.optimizeDatabase(dirPath);
-    await this.createIndexManifest(dirPath);
+    try {
+      this.logger.info("Starting buildQueryIndex...");
+      await this.buildQueryIndex(dirPath);
+      this.logger.info("buildQueryIndex completed successfully");
+      
+      this.logger.info("Starting optimizeDatabase...");
+      await this.optimizeDatabase(dirPath);
+      this.logger.info("optimizeDatabase completed successfully");
+      
+      this.logger.info("Starting createIndexManifest...");
+      await this.createIndexManifest(dirPath);
+      this.logger.info("createIndexManifest completed successfully");
+    } catch (error: any) {
+      this.logger.error(`Error in finalizeIndex: ${error.message}`);
+      this.logger.error(`Stack trace: ${error.stack}`);
+      throw error;
+    }
   }
 
   async isIndexStale(dirPath: string): Promise<boolean> {
