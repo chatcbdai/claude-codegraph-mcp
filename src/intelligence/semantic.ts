@@ -1,4 +1,4 @@
-import { EmbeddingEngine } from "../core/embeddings.js";
+import { EmbeddingEngine } from "../core/embeddings-fixed.js";
 import { CodeGraph } from "../core/graph.js";
 import { Logger } from "../utils/logger.js";
 

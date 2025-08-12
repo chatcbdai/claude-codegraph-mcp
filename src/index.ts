@@ -182,8 +182,13 @@ class CodeGraphMCPServer {
       this.currentWorkingDir = newWorkingDir;
       console.error(`[CodeGraph] Working directory changed to: ${newWorkingDir}`);
       
-      // Initialize or switch to project-specific database
-      await this.core.setProjectPath(newWorkingDir);
+      // Initialize core with project path if not already initialized
+      if (!this.core.isInitialized()) {
+        await this.core.initialize(newWorkingDir);
+      } else {
+        // Switch to project-specific database
+        await this.core.setProjectPath(newWorkingDir);
+      }
       
       await this.autoIndexer.onClaudeCodeStart(newWorkingDir);
       
@@ -264,9 +269,8 @@ class CodeGraphMCPServer {
   }
 
   async start(): Promise<void> {
-    // Initialize core without a project path initially
-    // Project-specific initialization happens when working directory is detected
-    await this.core.initialize();
+    // Don't initialize core here - wait for project detection
+    // This prevents creating a default database in the wrong location
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     

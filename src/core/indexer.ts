@@ -2,7 +2,7 @@ import path from "path";
 import fs from "fs/promises";
 import { CodeParser } from "./parser.js";
 import { CodeGraph } from "./graph.js";
-import { EmbeddingEngine } from "./embeddings.js";
+import { EmbeddingEngine } from "./embeddings-fixed.js";
 import { SmartChunker } from "../utils/chunker.js";
 import { Logger } from "../utils/logger.js";
 import { IndexingStatus } from "./auto-indexer.js";
@@ -47,6 +47,7 @@ export class CodeGraphCore {
   private parsedFiles: Map<string, ParsedFile> = new Map();
   private codeChunks: Map<string, CodeChunk> = new Map();
   private currentProjectPath?: string;
+  private initialized: boolean = false;
 
   constructor() {
     this.parser = new CodeParser();
@@ -65,7 +66,12 @@ export class CodeGraphCore {
     await this.parser.initialize();
     await this.graph.initialize(this.currentProjectPath);
     await this.embeddings.initialize();
+    this.initialized = true;
     this.logger.info(`CodeGraphCore initialized for project: ${this.currentProjectPath || 'global'}`);
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
   }
   
   async setProjectPath(projectPath: string): Promise<void> {

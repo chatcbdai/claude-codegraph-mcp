@@ -11,7 +11,8 @@ export default {
         module: 'ESNext',
         moduleResolution: 'node',
         esModuleInterop: true,
-        allowSyntheticDefaultImports: true
+        allowSyntheticDefaultImports: true,
+        types: ['node', 'jest']
       }
     }]
   },

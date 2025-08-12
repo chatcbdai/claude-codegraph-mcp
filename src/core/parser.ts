@@ -1,27 +1,42 @@
-import Parser from "tree-sitter";
 import { ParsedFile } from "./indexer.js";
+import { TreeSitterParser } from "./parser-treesitter.js";
 import { EnhancedCodeParser } from "./parser-enhanced.js";
 
 export class CodeParser {
-  private parsers: Map<string, Parser> = new Map();
-  private initialized = false;
+  private treeSitterParser: TreeSitterParser;
   private enhancedParser: EnhancedCodeParser;
+  private initialized = false;
 
   constructor() {
+    // Use tree-sitter as primary parser
+    this.treeSitterParser = new TreeSitterParser({
+      useTreeSitter: true,
+      fallbackToRegex: true,
+      maxFileSize: 10 * 1024 * 1024
+    });
+    // Keep enhanced parser as fallback
     this.enhancedParser = new EnhancedCodeParser();
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
     
+    await this.treeSitterParser.initialize();
     this.initialized = true;
   }
 
   async parseFile(content: string, language: string): Promise<ParsedFile> {
-    // Use enhanced parser for supported languages
-    const enhancedLanguages = ["typescript", "javascript", "python", "go"];
-    if (enhancedLanguages.includes(language)) {
-      return this.enhancedParser.parseFile(content, language);
+    // Try tree-sitter first for all supported languages
+    const treeSitterLanguages = ["typescript", "javascript", "tsx", "jsx", "python", "go", "rust", "java"];
+    const normalizedLang = this.normalizeLanguage(language);
+    
+    if (treeSitterLanguages.includes(normalizedLang)) {
+      try {
+        return await this.treeSitterParser.parseFile(content, normalizedLang);
+      } catch (error) {
+        console.error(`Tree-sitter parse failed, falling back: ${error}`);
+        return this.enhancedParser.parseFile(content, language);
+      }
     }
 
     // Fall back to basic parsing for other languages
@@ -241,5 +256,19 @@ export class CodeParser {
     }
 
     return structure;
+  }
+
+  private normalizeLanguage(language: string): string {
+    const langMap: { [key: string]: string } = {
+      "js": "javascript",
+      "jsx": "javascript",
+      "ts": "typescript",
+      "tsx": "tsx",
+      "py": "python",
+      "go": "go",
+      "rs": "rust",
+      "java": "java"
+    };
+    return langMap[language] || language;
   }
 }
