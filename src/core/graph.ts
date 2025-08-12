@@ -175,6 +175,17 @@ export class CodeGraph {
     );
   }
 
+  async nodeExists(nodeId: string): Promise<boolean> {
+    if (!this.db) throw new Error("Database not initialized");
+    
+    try {
+      const result = this.db.prepare('SELECT id FROM nodes WHERE id = ?').get(nodeId);
+      return result !== undefined;
+    } catch {
+      return false;
+    }
+  }
+
   async addRelationship(from: string, to: string, type: RelationType): Promise<void> {
     if (!this.db) throw new Error("Database not initialized");
 

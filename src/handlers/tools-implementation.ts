@@ -57,26 +57,87 @@ export async function findImplementationReal(
 
     const db = new Database(dbPath, { readonly: true });
     
-    // Search for implementations by name and content
-    const searchTerm = `%${query}%`;
+    let namedComponents: any[] = [];
     
-    // Search in function and class names
-    const namedComponents = db.prepare(`
-      SELECT id, type, name, file, content, metadata
-      FROM nodes
-      WHERE (type IN ('function', 'class', 'method')) 
-      AND (name LIKE ? OR content LIKE ?)
-      ORDER BY 
-        CASE 
-          WHEN name = ? THEN 0
-          WHEN name LIKE ? THEN 1
-          ELSE 2
-        END,
-        length(name)
-      LIMIT 20
-    `).all(searchTerm, searchTerm, query, `${query}%`) as any[];
+    // If semantic search is available and embeddings exist, use semantic search
+    if (capabilities.semanticSearch) {
+      // First check if we have embeddings
+      const hasEmbeddings = db.prepare(`
+        SELECT COUNT(*) as count FROM nodes WHERE embedding IS NOT NULL
+      `).get() as any;
+      
+      if (hasEmbeddings.count > 0) {
+        // Use semantic search
+        const { EmbeddingEngine } = await import('../core/embeddings.js');
+        const embeddings = new EmbeddingEngine();
+        await embeddings.initialize();
+        
+        // Generate embedding for the query
+        const queryEmbedding = await embeddings.embed(query + " " + context);
+        const queryBuffer = Buffer.from(queryEmbedding.buffer);
+        
+        // Get all nodes with embeddings
+        const nodesWithEmbeddings = db.prepare(`
+          SELECT id, type, name, file, content, metadata, embedding
+          FROM nodes
+          WHERE embedding IS NOT NULL AND type IN ('function', 'class', 'method')
+        `).all() as any[];
+        
+        // Calculate similarities
+        const results: Array<{ node: any; score: number }> = [];
+        for (const node of nodesWithEmbeddings) {
+          if (node.embedding) {
+            const nodeEmbedding = new Float32Array(node.embedding.buffer);
+            const similarity = embeddings.cosineSimilarity(queryEmbedding, nodeEmbedding);
+            results.push({ node, score: similarity });
+          }
+        }
+        
+        // Sort by similarity and take top results
+        results.sort((a, b) => b.score - a.score);
+        namedComponents = results.slice(0, 20).map(r => ({
+          ...r.node,
+          similarity_score: r.score
+        }));
+        
+        // Add exact name matches with boosted score
+        const exactMatches = db.prepare(`
+          SELECT id, type, name, file, content, metadata
+          FROM nodes
+          WHERE type IN ('function', 'class', 'method') AND name = ?
+        `).all(query) as any[];
+        
+        for (const match of exactMatches) {
+          if (!namedComponents.find(c => c.id === match.id)) {
+            namedComponents.unshift({ ...match, similarity_score: 1.0 });
+          }
+        }
+      }
+    }
+    
+    // Fallback to text search if semantic search not available or no results
+    if (namedComponents.length === 0) {
+      const searchTerm = `%${query}%`;
+      
+      // Search in function and class names
+      namedComponents = db.prepare(`
+        SELECT id, type, name, file, content, metadata
+        FROM nodes
+        WHERE (type IN ('function', 'class', 'method')) 
+        AND (name LIKE ? OR content LIKE ?)
+        ORDER BY 
+          CASE 
+            WHEN name = ? THEN 0
+            WHEN name LIKE ? THEN 1
+            ELSE 2
+          END,
+          length(name)
+        LIMIT 20
+      `).all(searchTerm, searchTerm, query, `${query}%`) as any[];
+    }
     
     // Search in file paths
+    const searchTerm = `%${query}%`;
     const fileMatches = db.prepare(`
       SELECT DISTINCT file, type, COUNT(*) as component_count
       FROM nodes
@@ -104,10 +165,19 @@ export async function findImplementationReal(
       resultText += `- Use different keywords or partial matches\n`;
     } else {
       if (namedComponents.length > 0) {
-        resultText += `## Components Found (${namedComponents.length})\n\n`;
+        const isSemanticSearch = namedComponents[0].similarity_score !== undefined;
+        resultText += `## Components Found (${namedComponents.length})\n`;
+        if (isSemanticSearch) {
+          resultText += `*Using semantic search with embeddings*\n\n`;
+        }
+        
         for (const component of namedComponents.slice(0, 10)) {
           const metadata = component.metadata ? JSON.parse(component.metadata) : {};
-          resultText += `### ${component.name} (${component.type})\n`;
+          resultText += `### ${component.name} (${component.type})`;
+          if (component.similarity_score !== undefined) {
+            resultText += ` - ${(component.similarity_score * 100).toFixed(1)}% match`;
+          }
+          resultText += `\n`;
           resultText += `**File**: \`${component.file}\`\n`;
           if (metadata.startLine && metadata.endLine) {
             resultText += `**Location**: Lines ${metadata.startLine}-${metadata.endLine}\n`;
@@ -192,13 +262,34 @@ export async function traceExecutionReal(
     
     const db = new Database(dbPath, { readonly: true });
     
-    // Search for the entry point
-    const entryNodes = db.prepare(`
+    // Search for the entry point - prioritize functions and methods over files
+    let entryNodes = db.prepare(`
       SELECT id, type, name, file 
       FROM nodes 
-      WHERE name LIKE ? OR id LIKE ? OR file LIKE ?
-      LIMIT 5
-    `).all(`%${entryPoint}%`, `%${entryPoint}%`, `%${entryPoint}%`) as any[];
+      WHERE name = ? AND type IN ('function', 'method', 'class')
+      LIMIT 1
+    `).all(entryPoint) as any[];
+    
+    // If exact match not found, try fuzzy match
+    if (entryNodes.length === 0) {
+      entryNodes = db.prepare(`
+        SELECT id, type, name, file 
+        FROM nodes 
+        WHERE name LIKE ? AND type IN ('function', 'method', 'class')
+        ORDER BY LENGTH(name)
+        LIMIT 5
+      `).all(`%${entryPoint}%`) as any[];
+    }
+    
+    // If still not found, try broader search
+    if (entryNodes.length === 0) {
+      entryNodes = db.prepare(`
+        SELECT id, type, name, file 
+        FROM nodes 
+        WHERE (name LIKE ? OR id LIKE ?) AND type NOT IN ('file')
+        LIMIT 5
+      `).all(`%${entryPoint}%`, `%${entryPoint}%`) as any[];
+    }
     
     if (entryNodes.length === 0) {
       db.close();

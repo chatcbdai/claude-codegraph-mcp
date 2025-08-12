@@ -106,10 +106,19 @@ export class CodeGraphCore {
     const parsedFiles = Array.from(this.parsedFiles.values());
     let processed = 0;
 
+    // Phase 1: Create all nodes first
     for (const file of parsedFiles) {
-      await this.analyzeRelationships(file);
+      await this.createAllNodes(file);
       processed++;
-      progressCallback(processed, parsedFiles.length);
+      progressCallback(processed / 2, parsedFiles.length);
+    }
+
+    // Phase 2: Create relationships after all nodes exist
+    processed = 0;
+    for (const file of parsedFiles) {
+      await this.createFileRelationships(file);
+      processed++;
+      progressCallback((parsedFiles.length + processed) / 2, parsedFiles.length);
     }
   }
 
@@ -117,13 +126,43 @@ export class CodeGraphCore {
     dirPath: string,
     progressCallback: (processed: number, total: number) => void
   ): Promise<void> {
+    // Generate embeddings for both chunks and nodes
     const chunks = Array.from(this.codeChunks.values());
     let processed = 0;
 
+    // First generate embeddings for chunks
     for (const chunk of chunks) {
       await this.generateEmbedding(chunk);
       processed++;
-      progressCallback(processed, chunks.length);
+      progressCallback(processed / 2, chunks.length);
+    }
+    
+    // Also generate embeddings for functions and classes (for semantic search)
+    const parsedFiles = Array.from(this.parsedFiles.values());
+    let nodeCount = 0;
+    const totalNodes = parsedFiles.reduce((sum, file) => 
+      sum + file.functions.length + file.classes.length, 0);
+    
+    for (const file of parsedFiles) {
+      // Generate embeddings for functions
+      for (const func of file.functions) {
+        const nodeId = `${file.path}:${func.name}`;
+        const text = `${func.name} ${func.content || ''}`.substring(0, 512);
+        const embedding = await this.embeddings.embed(text);
+        await this.graph.addEmbedding(nodeId, embedding);
+        nodeCount++;
+        progressCallback((chunks.length + nodeCount) / 2, chunks.length);
+      }
+      
+      // Generate embeddings for classes
+      for (const cls of file.classes) {
+        const nodeId = `${file.path}:${cls.name}`;
+        const text = `${cls.name} ${cls.content || ''}`.substring(0, 512);
+        const embedding = await this.embeddings.embed(text);
+        await this.graph.addEmbedding(nodeId, embedding);
+        nodeCount++;
+        progressCallback((chunks.length + nodeCount) / 2, chunks.length);
+      }
     }
   }
 
@@ -188,7 +227,8 @@ export class CodeGraphCore {
 
   async reindexFile(filePath: string): Promise<void> {
     const parsedFile = await this.parseFile(filePath);
-    await this.analyzeRelationships(parsedFile);
+    await this.createAllNodes(parsedFile);
+    await this.createFileRelationships(parsedFile);
     const chunks = this.chunker.chunkCode(
       parsedFile,
       await fs.readFile(filePath, "utf-8")
@@ -223,12 +263,25 @@ export class CodeGraphCore {
       "build",
       "__pycache__",
     ];
+    
+    // Get git worktrees to exclude
+    const worktreePaths = await this.getWorktreePaths(dirPath);
 
     async function scan(dir: string): Promise<void> {
       const entries = await fs.readdir(dir, { withFileTypes: true });
 
       for (const entry of entries) {
         const fullPath = path.join(dir, entry.name);
+        
+        // Check if this is a worktree directory
+        const isWorktree = worktreePaths.some(wt => 
+          fullPath.startsWith(wt) && fullPath !== dirPath
+        );
+        
+        if (isWorktree) {
+          // Skip worktree directories
+          continue;
+        }
         
         if (
           entry.isDirectory() &&
@@ -243,6 +296,33 @@ export class CodeGraphCore {
 
     await scan(dirPath);
     return files;
+  }
+  
+  private async getWorktreePaths(dirPath: string): Promise<string[]> {
+    try {
+      // Initialize git if not already done
+      if (!this.git) {
+        this.git = simpleGit(dirPath);
+      }
+      
+      // Get worktree list
+      const worktreeOutput = await this.git.raw(['worktree', 'list', '--porcelain']);
+      const worktrees: string[] = [];
+      
+      // Parse worktree output
+      const lines = worktreeOutput.split('\n');
+      for (const line of lines) {
+        if (line.startsWith('worktree ')) {
+          const path = line.substring('worktree '.length).trim();
+          worktrees.push(path);
+        }
+      }
+      
+      return worktrees;
+    } catch (error) {
+      // If git worktree command fails, just return empty array
+      return [];
+    }
   }
 
   private isIndexableFile(filePath: string): boolean {
@@ -320,7 +400,7 @@ export class CodeGraphCore {
     return languageMap[ext] || "text";
   }
 
-  private async analyzeRelationships(file: ParsedFile): Promise<void> {
+  private async createAllNodes(file: ParsedFile): Promise<void> {
     // Add file node
     await this.graph.addNode({
       id: file.path,
@@ -335,20 +415,7 @@ export class CodeGraphCore {
       },
     });
 
-    // Process imports to create IMPORTS relationships
-    for (const imp of file.imports) {
-      // Try to resolve the import to a file in the project
-      const resolvedPath = await this.resolveImport(imp.source, file.path);
-      if (resolvedPath) {
-        await this.graph.addRelationship(
-          file.path,
-          resolvedPath,
-          "IMPORTS"
-        );
-      }
-    }
-
-    // Process functions
+    // Process functions - just create nodes
     for (const func of file.functions) {
       const funcId = `${file.path}:${func.name}`;
       await this.graph.addNode({
@@ -359,30 +426,9 @@ export class CodeGraphCore {
         content: func.content,
         metadata: func,
       });
-      
-      await this.graph.addRelationship(
-        file.path,
-        funcId,
-        "CONTAINS"
-      );
-      
-      // Process function calls to create CALLS relationships
-      if (func.calls && func.calls.length > 0) {
-        for (const calledFunc of func.calls) {
-          // Try to resolve the called function
-          const calledFuncId = await this.resolveFunctionCall(calledFunc, file.path);
-          if (calledFuncId) {
-            await this.graph.addRelationship(
-              funcId,
-              calledFuncId,
-              "CALLS"
-            );
-          }
-        }
-      }
     }
 
-    // Process classes
+    // Process classes - just create nodes
     for (const cls of file.classes) {
       const classId = `${file.path}:${cls.name}`;
       await this.graph.addNode({
@@ -394,6 +440,99 @@ export class CodeGraphCore {
         metadata: cls,
       });
       
+      // Process methods within the class - just create nodes
+      if (cls.methods && cls.methods.length > 0) {
+        for (const methodName of cls.methods) {
+          const methodId = `${classId}:${methodName}`;
+          await this.graph.addNode({
+            id: methodId,
+            type: "method",
+            name: methodName,
+            file: file.path,
+            content: "",
+            metadata: { className: cls.name },
+          });
+        }
+      }
+    }
+    
+    // Process type aliases if present - just create nodes
+    if (file.typeAliases) {
+      for (const typeAlias of file.typeAliases) {
+        const typeAliasId = `${file.path}:${typeAlias.name}`;
+        await this.graph.addNode({
+          id: typeAliasId,
+          type: "type_alias",
+          name: typeAlias.name,
+          file: file.path,
+          content: typeAlias.value,
+          metadata: typeAlias,
+        });
+      }
+    }
+    
+    // Process constants if present - just create nodes
+    if (file.constants) {
+      for (const constant of file.constants) {
+        const constantId = `${file.path}:${constant.name}`;
+        await this.graph.addNode({
+          id: constantId,
+          type: "constant",
+          name: constant.name,
+          file: file.path,
+          content: constant.value,
+          metadata: constant,
+        });
+      }
+    }
+  }
+
+  private async createFileRelationships(file: ParsedFile): Promise<void> {
+    // Process imports to create IMPORTS relationships
+    for (const imp of file.imports) {
+      // Try to resolve the import to a file in the project
+      const resolvedPath = await this.resolveImport(imp.source, file.path);
+      if (resolvedPath && await this.nodeExists(resolvedPath)) {
+        await this.graph.addRelationship(
+          file.path,
+          resolvedPath,
+          "IMPORTS"
+        );
+      }
+    }
+
+    // Process functions - create CONTAINS and CALLS relationships
+    for (const func of file.functions) {
+      const funcId = `${file.path}:${func.name}`;
+      
+      // Create CONTAINS relationship (file contains function)
+      await this.graph.addRelationship(
+        file.path,
+        funcId,
+        "CONTAINS"
+      );
+      
+      // Process function calls to create CALLS relationships
+      if (func.calls && func.calls.length > 0) {
+        for (const calledFunc of func.calls) {
+          // Try to resolve the called function
+          const calledFuncId = await this.resolveFunctionCall(calledFunc, file.path);
+          if (calledFuncId && await this.nodeExists(calledFuncId)) {
+            await this.graph.addRelationship(
+              funcId,
+              calledFuncId,
+              "CALLS"
+            );
+          }
+        }
+      }
+    }
+
+    // Process classes - create CONTAINS and INHERITS_FROM relationships
+    for (const cls of file.classes) {
+      const classId = `${file.path}:${cls.name}`;
+      
+      // Create CONTAINS relationship (file contains class)
       await this.graph.addRelationship(
         file.path,
         classId,
@@ -408,7 +547,7 @@ export class CodeGraphCore {
           // Skip common non-class bases like Protocol, ABC, etc.
           if (!['object', 'Protocol', 'ABC', 'BaseModel'].includes(baseClass)) {
             const baseClassId = await this.resolveClass(baseClass, file.path);
-            if (baseClassId) {
+            if (baseClassId && await this.nodeExists(baseClassId)) {
               await this.graph.addRelationship(
                 classId,
                 baseClassId,
@@ -419,18 +558,10 @@ export class CodeGraphCore {
         }
       }
       
-      // Process methods within the class
+      // Process methods within the class - create CONTAINS relationships
       if (cls.methods && cls.methods.length > 0) {
         for (const methodName of cls.methods) {
           const methodId = `${classId}:${methodName}`;
-          await this.graph.addNode({
-            id: methodId,
-            type: "method",
-            name: methodName,
-            file: file.path,
-            content: "",
-            metadata: { className: cls.name },
-          });
           
           await this.graph.addRelationship(
             classId,
@@ -441,18 +572,10 @@ export class CodeGraphCore {
       }
     }
     
-    // Process type aliases if present
+    // Process type aliases if present - create CONTAINS relationships
     if (file.typeAliases) {
       for (const typeAlias of file.typeAliases) {
         const typeAliasId = `${file.path}:${typeAlias.name}`;
-        await this.graph.addNode({
-          id: typeAliasId,
-          type: "type_alias",
-          name: typeAlias.name,
-          file: file.path,
-          content: typeAlias.value,
-          metadata: typeAlias,
-        });
         
         await this.graph.addRelationship(
           file.path,
@@ -462,18 +585,10 @@ export class CodeGraphCore {
       }
     }
     
-    // Process constants if present
+    // Process constants if present - create CONTAINS relationships
     if (file.constants) {
       for (const constant of file.constants) {
         const constantId = `${file.path}:${constant.name}`;
-        await this.graph.addNode({
-          id: constantId,
-          type: "constant",
-          name: constant.name,
-          file: file.path,
-          content: constant.value,
-          metadata: constant,
-        });
         
         await this.graph.addRelationship(
           file.path,
@@ -484,18 +599,40 @@ export class CodeGraphCore {
     }
   }
 
+  private async nodeExists(nodeId: string): Promise<boolean> {
+    return await this.graph.nodeExists(nodeId);
+  }
+
+  // Keep for backward compatibility - delegates to new methods
+  private async analyzeRelationships(file: ParsedFile): Promise<void> {
+    await this.createAllNodes(file);
+    await this.createFileRelationships(file);
+  }
+
   private async resolveImport(importPath: string, fromFile: string): Promise<string | null> {
     // Handle relative imports
     if (importPath.startsWith('.')) {
       const dir = path.dirname(fromFile);
-      const possiblePaths = [
-        path.resolve(dir, importPath + '.js'),
-        path.resolve(dir, importPath + '.ts'),
-        path.resolve(dir, importPath + '.py'),
-        path.resolve(dir, importPath, 'index.js'),
-        path.resolve(dir, importPath, 'index.ts'),
-        path.resolve(dir, importPath, '__init__.py'),
-      ];
+      
+      // Check if the import already has an extension
+      const hasExtension = /\.(js|jsx|ts|tsx|py|mjs|cjs)$/.test(importPath);
+      
+      const possiblePaths = [];
+      
+      if (hasExtension) {
+        // If it has an extension, use it directly
+        possiblePaths.push(path.resolve(dir, importPath));
+      } else {
+        // If no extension, try common extensions
+        possiblePaths.push(
+          path.resolve(dir, importPath + '.js'),
+          path.resolve(dir, importPath + '.ts'),
+          path.resolve(dir, importPath + '.py'),
+          path.resolve(dir, importPath, 'index.js'),
+          path.resolve(dir, importPath, 'index.ts'),
+          path.resolve(dir, importPath, '__init__.py'),
+        );
+      }
       
       for (const possiblePath of possiblePaths) {
         if (this.parsedFiles.has(possiblePath)) {

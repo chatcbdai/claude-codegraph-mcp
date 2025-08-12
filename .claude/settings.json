@@ -1,0 +1,109 @@
+{
+  "projectName": "claude-codegraph",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "condition": "*.py",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python -m py_compile {{file_path}} 2>&1 | grep -E 'SyntaxError|IndentationError' && echo '❌ Python syntax error!' && exit 1 || true",
+            "description": "Block edits with syntax errors"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "condition": "*pip install*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '📦 Remember to update requirements.txt after installing'",
+            "description": "Dependency reminder"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "condition": "*.py",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "black {{file_path}} --quiet 2>/dev/null",
+            "description": "Auto-format Python"
+          },
+          {
+            "type": "command",
+            "command": "isort {{file_path}} --quiet 2>/dev/null",
+            "description": "Sort imports"
+          },
+          {
+            "type": "command",
+            "command": "mypy {{file_path}} --ignore-missing-imports --no-error-summary 2>/dev/null || true",
+            "description": "Type check"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "condition": "anti_detection/bypasses/*.js",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '🛡️ Anti-detection script modified! Test with: python scripts/validate_bypasses.py'",
+            "description": "Bypass change alert"
+          }
+        ]
+      },
+      {
+        "matcher": "Write",
+        "condition": "*.py",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -E '(api_key|password|token|secret)\\s*=\\s*[\"\\x27][^\"\\x27]+[\"\\x27]' {{file_path}} && echo '🚨 SECURITY WARNING: Hardcoded credential detected!' || true",
+            "description": "Security scan"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '✅ Session complete. Run: pytest -xvs to verify changes'",
+            "description": "Session end reminder"
+          }
+        ]
+      }
+    ]
+  },
+  "customCommands": {
+    "test": "pytest -xvs",
+    "test-browser": "pytest tests/browser/ -xvs", 
+    "test-scraping": "pytest tests/scraping/ -xvs",
+    "format": "black . && isort .",
+    "lint": "pylint **/*.py --disable=C0114,C0115,C0116",
+    "type-check": "mypy . --ignore-missing-imports",
+    "run": "python main.py",
+    "run-example": "python examples/example_usage.py",
+    "validate-bypasses": "python scripts/validate_bypasses.py",
+    "check-detection": "python scripts/check_detection_status.py"
+  },
+  "subagents": {
+    "cd-orchestrator": {
+      "description": "Code Development team orchestrator",
+      "proactive": true
+    }
+  },
+  "teamRouting": {
+    "codeDevelopment": {
+      "keywords": ["code", "implement", "fix", "refactor", "test", "feature", "bug"],
+      "orchestrator": "cd-orchestrator"
+    }
+  }
+}
