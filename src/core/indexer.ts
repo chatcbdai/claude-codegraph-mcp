@@ -37,6 +37,7 @@ export interface CodeChunk {
 }
 
 export class CodeGraphCore {
+  private static readonly INDEXER_VERSION = "2.0.0"; // Bump this to force re-index
   private parser: CodeParser;
   private graph: CodeGraph;
   private embeddings: EmbeddingEngine;
@@ -193,6 +194,12 @@ export class CodeGraphCore {
       const manifest = await this.loadManifest(manifestPath);
       const currentGitHead = await this.getCurrentGitHead(dirPath);
       const lastModified = await this.getLastModifiedTime(dirPath);
+
+      // Check if indexer version has changed (forces re-index after updates)
+      if (manifest.indexerVersion !== CodeGraphCore.INDEXER_VERSION) {
+        this.logger.info(`Indexer version changed from ${manifest.indexerVersion} to ${CodeGraphCore.INDEXER_VERSION}, re-indexing required`);
+        return true;
+      }
 
       return (
         manifest.gitHead !== currentGitHead ||
@@ -747,6 +754,7 @@ export class CodeGraphCore {
   private async createIndexManifest(dirPath: string): Promise<void> {
     const manifest = {
       version: "1.0.0",
+      indexerVersion: CodeGraphCore.INDEXER_VERSION,  // Track indexer version
       created: new Date().toISOString(),
       gitHead: await this.getCurrentGitHead(dirPath),
       lastModified: await this.getLastModifiedTime(dirPath),
