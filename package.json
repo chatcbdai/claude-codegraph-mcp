@@ -55,6 +55,14 @@
     "tsx": "^4.7.0",
     "typescript": "^5.9.2"
   },
+  "overrides": {
+    "glob": "^10.4.5",
+    "babel-plugin-istanbul": {
+      "test-exclude": {
+        "glob": "^10.4.5"
+      }
+    }
+  },
   "engines": {
     "node": ">=18.0.0"
   }
