@@ -422,31 +422,45 @@ export class CodeGraph {
   async searchByEmbedding(embedding: Float32Array, limit: number = 20): Promise<any[]> {
     if (!this.db) throw new Error("Database not initialized");
 
-    const nodes = this.db.prepare(`
-      SELECT id, type, name, file, content, metadata, embedding
-      FROM nodes
-      WHERE embedding IS NOT NULL
-      LIMIT 1000
-    `).all();
-
-    const results = nodes
-      .map((node: any) => {
-        if (!node.embedding) return null;
-        
-        const nodeEmbedding = new Float32Array(node.embedding);
-        const similarity = this.cosineSimilarity(embedding, nodeEmbedding);
-        
-        return {
-          ...node,
-          metadata: JSON.parse(node.metadata || "{}"),
-          similarity,
-        };
-      })
-      .filter((n) => n !== null)
+    // Process in smaller batches to avoid loading all embeddings into memory
+    const batchSize = 100;
+    const allResults: any[] = [];
+    let offset = 0;
+    
+    // Process up to 10 batches (1000 nodes max)
+    for (let batch = 0; batch < 10; batch++) {
+      const nodes = this.db.prepare(`
+        SELECT id, type, name, file, content, metadata, embedding
+        FROM nodes
+        WHERE embedding IS NOT NULL
+        LIMIT ? OFFSET ?
+      `).all(batchSize, offset);
+      
+      if (nodes.length === 0) break;
+      
+      const batchResults = nodes
+        .map((node: any) => {
+          if (!node.embedding) return null;
+          
+          const nodeEmbedding = new Float32Array(node.embedding);
+          const similarity = this.cosineSimilarity(embedding, nodeEmbedding);
+          
+          return {
+            ...node,
+            metadata: JSON.parse(node.metadata || "{}"),
+            similarity,
+          };
+        })
+        .filter((n) => n !== null);
+      
+      allResults.push(...batchResults);
+      offset += batchSize;
+    }
+    
+    // Sort all results and return top matches
+    return allResults
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, limit);
-
-    return results;
   }
 
   private cosineSimilarity(a: Float32Array, b: Float32Array): number {

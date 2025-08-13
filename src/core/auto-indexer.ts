@@ -131,15 +131,20 @@ export class AutoIndexer extends EventEmitter {
       status.currentPhase = "complete";
       try {
         await this.finalizeIndexing(dirPath, status);
+        // Only mark as complete if finalization succeeds
+        status.capabilities.queryIntelligence = true;
+        status.progress = 100;
+        status.isIndexing = false;
+        status.isComplete = true;
+        this.updateStatus(dirPath, status);
       } catch (error: any) {
-        this.logger.error(`Finalization failed but continuing: ${error.message}`);
-        // Continue even if finalization fails - the index is mostly complete
+        this.logger.error(`Finalization failed: ${error.message}`);
+        // Do NOT mark as complete if finalization fails
+        status.error = error.message;
+        status.isIndexing = false;
+        status.isComplete = false;
+        this.updateStatus(dirPath, status);
       }
-      status.capabilities.queryIntelligence = true;
-      status.progress = 100;
-      status.isIndexing = false;
-      status.isComplete = true;
-      this.updateStatus(dirPath, status);
 
       this.logger.info(`Indexing completed for: ${dirPath}`);
     } catch (error: any) {

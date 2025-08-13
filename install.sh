@@ -67,10 +67,11 @@ install_codegraph() {
     # Clone repository (using current directory if it's the repo)
     if [ -f "package.json" ] && grep -q "codegraph-mcp" package.json; then
         echo "Installing from current directory..."
-        cp -r . "$INSTALL_DIR"
+        # Copy source files, excluding node_modules and other build artifacts
+        rsync -av --exclude='node_modules' --exclude='dist' --exclude='.git' --exclude='*.db' . "$INSTALL_DIR/"
     else
         echo "Cloning repository..."
-        git clone https://github.com/your-org/codegraph-mcp.git "$INSTALL_DIR"
+        git clone https://github.com/chatcbdai/claude-codegraph-mcp.git "$INSTALL_DIR"
     fi
     
     cd "$INSTALL_DIR"
@@ -211,7 +212,7 @@ main() {
     echo "- explain_architecture"
     echo ""
     echo "For more information, visit:"
-    echo "https://github.com/your-org/codegraph-mcp"
+    echo "https://github.com/chatcbdai/claude-codegraph-mcp"
     echo ""
     
     # Reload shell if possible

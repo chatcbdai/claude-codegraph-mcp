@@ -226,7 +226,7 @@ class CodeGraphMCPServer {
         ],
         ignoreInitial: true,
         persistent: true,
-        depth: 10, // Limit depth to avoid system directories
+        // Remove depth limit - scan all levels
         followSymlinks: false // Don't follow symlinks
       });
     
@@ -268,6 +268,20 @@ class CodeGraphMCPServer {
     }
   }
 
+  private cleanup(): void {
+    try {
+      if (this.directoryWatcher) {
+        this.directoryWatcher.close();
+        this.directoryWatcher = undefined;
+      }
+      // Note: CodeGraph class doesn't have a close method currently
+      // but we should clean up any other resources here
+      console.error("[CodeGraph] Cleanup completed");
+    } catch (error: any) {
+      console.error(`[CodeGraph] Error during cleanup: ${error.message}`);
+    }
+  }
+
   async start(): Promise<void> {
     // Don't initialize core here - wait for project detection
     // This prevents creating a default database in the wrong location
@@ -283,4 +297,17 @@ const server = new CodeGraphMCPServer();
 server.start().catch((error) => {
   console.error("[CodeGraph] Failed to start server:", error);
   process.exit(1);
+});
+
+// Add cleanup handlers for graceful shutdown
+process.on('SIGINT', () => {
+  console.error("[CodeGraph] Received SIGINT, shutting down...");
+  (server as any).cleanup();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  console.error("[CodeGraph] Received SIGTERM, shutting down...");
+  (server as any).cleanup();
+  process.exit(0);
 });

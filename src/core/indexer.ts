@@ -99,6 +99,10 @@ export class CodeGraphCore {
     dirPath: string,
     progressCallback: (processed: number, total: number) => void
   ): Promise<void> {
+    // Clear Maps at start to prevent memory leaks
+    this.parsedFiles.clear();
+    this.codeChunks.clear();
+    
     const files = await this.getIndexableFiles(dirPath);
     let processed = 0;
 
